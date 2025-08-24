@@ -1,5 +1,6 @@
 // docs/js/app.js
 /* global ethers */
+import { buildCanonicalPayload, makeShareString, parseShareString, downloadShareFile, makeDeepLink } from './share.js';
 import { $, log, ensure0x, toWeiFromEthStr, zeroAddr, isHexAddress, sortLowercaseAddresses } from './utils.js';
 import { connectWallet, getProvider, getSigner, disconnectWallet } from './wallet.js';
 import { bindSafe, unbindSafe, readThreshold, readNonce, getTransactionHash, approveHash, execTransaction, readOwners, getApprovalsForHash } from './safe.js';
@@ -195,14 +196,18 @@ function autoGenSignaturesFromApprovals() {
 
 // ====== 批准 / 执行 ======
 async function onApprove() {
+  const btn = $('btnApprove');           // 防抖：批准按钮禁用
+  if (btn) btn.disabled = true;
+
   try {
     await ensureSafeTxHash();
+
     const provider = getProvider() || (getSigner() && getSigner().provider);
     const net = provider ? await provider.getNetwork() : { chainId: NaN };
     const chainIdNum = Number(net.chainId);
     const cinfo = chainInfoById(chainIdNum);
     const safeAddr = $('safe').value.trim();
-    const signerAddr = await getSigner().getAddress().catch(()=>null);
+    const signerAddr = await getSigner().getAddress().catch(() => null);
     const h = $('safeTxHash').value.trim();
 
     const rows = [
@@ -212,17 +217,43 @@ async function onApprove() {
       ['Safe 地址', safeAddr],
       ['safeTxHash', h],
     ];
+
     const { proceed, txPromise } = await openConfirmTwoStep(
       '请确认：批准交易哈希（approveHash）',
       rows,
       () => approveHash(h)
     );
     if (!proceed) { log('已取消批准'); return; }
+
     log('已请求钱包，请在钱包里确认；确认后等待链上回执…');
+
+    // ✅ 等链上确认成功
     const rc = await txPromise;
     log('approveHash 确认：' + rc.transactionHash);
+
+    // 先刷新批准状态（让面板展示最新 owner✅ 列表）
     await refreshApprovals();
-  } catch (e) { log(e.message || String(e), true); }
+
+    // 再生成分享串（包含最新的信息，便于发给下一位）
+    try { await onBuildShare(); } catch (_) {}
+
+    // （可选）阈值已满足时，自动拼 signatures 方便执行
+    try {
+      const th = Number($('threshold').value || 0);
+      if ((approvalsCache?.approvedOwners?.length || 0) >= th) {
+        autoGenSignaturesFromApprovals?.();
+      }
+    } catch (_) {}
+  } catch (e) {
+    // 更友好的拒签提示
+    if (e?.code === 4001 || e?.code === 'ACTION_REJECTED') {
+      log('已取消：你在钱包里拒绝了本次批准。', true);
+    } else {
+      log(e.message || String(e), true);
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 function onGenSigManual() {
   try {
@@ -284,29 +315,157 @@ async function onExec() {
   } catch (e) { log(e.message || String(e), true); }
 }
 
+// ====== 共享 ======
+async function onBuildShare() {
+  try {
+    // 确保已有 hash（也会检查地址/金额确认）
+    const { hash, params } = await ensureSafeTxHash();
+
+    // 取阈值 & 当前 signer（可选）
+    let th = $('threshold').value;
+    if (!th) th = await readThreshold();
+    let signerAddr = null;
+    try { signerAddr = await getSigner().getAddress(); } catch {}
+
+    // 链信息
+    const provider = getProvider() || (getSigner() && getSigner().provider);
+    const net = provider ? await provider.getNetwork() : { chainId: NaN };
+    const chainIdNum = Number(net.chainId);
+    const cinfo = chainInfoById(chainIdNum);
+
+    // 规范化载荷
+    const payload = buildCanonicalPayload({
+      chainId: chainIdNum,
+      chainName: cinfo.chainName,
+      safe: $('safe').value.trim(),
+      tx: params,
+      safeTxHash: hash,
+      threshold: th,
+      approvedBy: signerAddr || ''
+    });
+
+    // 生成分享串 & 指纹
+    const { share, sha256, json } = await makeShareString(payload);
+    $('shareStr').value = share;
+    $('shareInfo').textContent = `SHA-256=${sha256.slice(0,16)}…  长度=${share.length}  （已包含 chainId / safe / 全部参数 / safeTxHash）`;
+    log('已生成分享字符串；可复制或下载文件/深链');
+  } catch (e) { log(e.message || String(e), true); }
+}
+async function onCopyShare() {
+  try {
+    const s = $('shareStr').value.trim();
+    if (!s) { log('请先生成分享字符串', true); return; }
+    await navigator.clipboard.writeText(s);
+    log('已复制分享字符串到剪贴板');
+  } catch (e) { log(e.message || String(e), true); }
+}
+async function onDownloadShare() {
+  try {
+    const s = $('shareStr').value.trim();
+    if (!s) { log('请先生成分享字符串', true); return; }
+    const { payload } = await parseShareString(s);
+    await downloadShareFile(payload);
+    log('已下载 JSON 文件（内含 SHA-256 指纹）');
+  } catch (e) { log(e.message || String(e), true); }
+}
+async function onImportStr() {
+  try {
+    const s = $('importStr').value.trim();
+    if (!s) { log('请粘贴分享字符串 SAFE1.…', true); return; }
+    const { payload, sha256 } = await parseShareString(s);
+
+    // 1) 切链（如果我们支持该链）
+    const chainIdNum = Number(payload.chain?.chainId || '0');
+    const match = Object.entries(CHAINS).find(([k,v]) => parseInt(v.chainId,16) === chainIdNum);
+    if (match) {
+      await switchOrAdd(match[0]);
+      $('chain').value = `${match[1].chainName} (chainId=${chainIdNum})`;
+      setAmountSymbolByChainId(chainIdNum);
+      log(`已切换到 ${match[1].chainName}`);
+    } else {
+      log(`未知链 ${chainIdNum}，请手动切换`, true);
+    }
+
+    // 2) 填充 Safe 地址（不自动绑定，避免误操作）
+    if (payload.safe) $('safe').value = payload.safe;
+
+    // 3) 填充交易参数
+    const t = payload.tx || {};
+    $('to').value = t.to || '';
+    $('amountEth').value = (window.ethers && t.valueWei) ? ethers.utils.formatEther(t.valueWei) : '';
+    $('data').value = t.data || '0x';
+    $('operation').value = t.operation || '0';
+    $('safeTxGas').value = t.safeTxGas || '0';
+    $('baseGas').value = t.baseGas || '0';
+    $('gasPrice').value = t.gasPrice || '0';
+    $('gasToken').value = t.gasToken || '0x0000000000000000000000000000000000000000';
+    $('refundReceiver').value = t.refundReceiver || '0x0000000000000000000000000000000000000000';
+    $('nonce').value = t.nonce || '';
+
+    // 4) 设为已确认（来自可信载荷），并更新提示
+    toConfirmed = !!t.to; updateToStatus();
+    amountConfirmed = !!t.valueWei; updateAmountStatus();
+
+    // 5) 计算本地 hash 与载荷的 safeTxHash 一致性校验
+    const { hash: localHash } = await ensureSafeTxHash();
+    if ((payload.safeTxHash || '').toLowerCase() !== (localHash||'').toLowerCase()) {
+      log('警告：载荷 safeTxHash 与本地计算不一致，请勿继续！', true);
+    } else {
+      $('safeTxHash').value = localHash;
+      log(`已导入并校验成功（SHA-256 前缀 ${sha256.slice(0,16)}…）`);
+    }
+  } catch (e) { log(e.message || String(e), true); }
+}
+async function onMakeLink() {
+  try {
+    const s = $('shareStr').value.trim();
+    if (!s) { log('请先生成分享字符串', true); return; }
+    const { payload } = await parseShareString(s);
+    const url = makeDeepLink(payload);
+    await navigator.clipboard.writeText(url);
+    log('已复制深链：打开即自动填充（信息在 URL #hash，不经服务端）');
+  } catch (e) { log(e.message || String(e), true); }
+}
+
+
+
 // ====== 初始化与事件绑定 ======
-function main() {
-  setAdvancedReadonly(true); updateToStatus(); updateAmountStatus();
+// ✅ 把 main 声明为 async（因内部有 await）
+async function main() {
+  setAdvancedReadonly(true);
+  updateToStatus();
+  updateAmountStatus();
 
-  $('btnConnect').addEventListener('click', onConnect);
-  $('btnDisconnect').addEventListener('click', onDisconnect);
-  $('btnSwitchAccount').addEventListener('click', onSwitchAccount);
-  $('btnBindSafe').addEventListener('click', onBindSafe);
+  // 事件绑定（可选：加 ? 防止元素缺失时报错）
+  $('btnConnect')?.addEventListener('click', onConnect);
+  $('btnDisconnect')?.addEventListener('click', onDisconnect);
+  $('btnSwitchAccount')?.addEventListener('click', onSwitchAccount);
+  $('btnBindSafe')?.addEventListener('click', onBindSafe);
 
-  $('btnRead').addEventListener('click', onRead);
-  $('btnHash').addEventListener('click', onHash);
-  $('btnApprove').addEventListener('click', onApprove);
-  $('btnSig').addEventListener('click', onGenSigManual);
-  $('btnAutoSig').addEventListener('click', autoGenSignaturesFromApprovals);
-  $('btnExec').addEventListener('click', onExec);
-  $('btnToggleAdvanced').addEventListener('click', toggleAdvanced);
-  $('btnConfirmTo').addEventListener('click', confirmTo);
-  $('btnConfirmAmount').addEventListener('click', confirmAmount);
-  $('btnRefreshApprovals').addEventListener('click', refreshApprovals);
+  $('btnRead')?.addEventListener('click', onRead);
+  $('btnHash')?.addEventListener('click', onHash);
+  $('btnApprove')?.addEventListener('click', onApprove);
+  $('btnSig')?.addEventListener('click', onGenSigManual);
+  $('btnAutoSig')?.addEventListener('click', autoGenSignaturesFromApprovals);
+  $('btnExec')?.addEventListener('click', onExec);
+  $('btnToggleAdvanced')?.addEventListener('click', toggleAdvanced);
+  $('btnConfirmTo')?.addEventListener('click', confirmTo);
+  $('btnConfirmAmount')?.addEventListener('click', confirmAmount);
+  $('btnRefreshApprovals')?.addEventListener('click', refreshApprovals);
+
+  $('btnBuildShare')?.addEventListener('click', onBuildShare);
+  $('btnCopyShare')?.addEventListener('click', onCopyShare);
+  $('btnDownloadShare')?.addEventListener('click', onDownloadShare);
+  $('btnImportStr')?.addEventListener('click', onImportStr);
+  $('btnMakeLink')?.addEventListener('click', onMakeLink);
 
   // 输入改动 → 取消确认
-  $('to').addEventListener('input', () => { if (toConfirmed){ toConfirmed=false; updateToStatus(); log('收款地址已修改，需重新确认'); }});
-  $('amountEth').addEventListener('input', () => { if (amountConfirmed){ amountConfirmed=false; updateAmountStatus(); log('金额已修改，需重新确认'); }});
+  $('to')?.addEventListener('input', () => {
+    if (toConfirmed){ toConfirmed=false; updateToStatus(); log('收款地址已修改，需重新确认'); }
+  });
+  $('amountEth')?.addEventListener('input', () => {
+    if (amountConfirmed){ amountConfirmed=false; updateAmountStatus(); log('金额已修改，需重新确认'); }
+  });
 
   // 钱包事件
   if (window.ethereum) {
@@ -320,10 +479,14 @@ function main() {
     });
     window.ethereum.on('accountsChanged', async (accts) => {
       if (accts && accts.length) {
-        $('acct').textContent = `已连接：${accts[0]}`; log('已切换账号为：' + accts[0]);
+        $('acct').textContent = `已连接：${accts[0]}`;
+        log('已切换账号为：' + accts[0]);
         try {
           const addr = $('safe').value.trim();
-          if (addr && getProvider()) { bindSafe(addr, getSigner() || getProvider()); log('已用新账号重新绑定 Safe 合约：' + addr); }
+          if (addr && getProvider()) {
+            bindSafe(addr, getSigner() || getProvider());
+            log('已用新账号重新绑定 Safe 合约：' + addr);
+          }
         } catch (e) { log(e?.message || String(e), true); }
       } else {
         $('acct').textContent = '';
@@ -333,9 +496,45 @@ function main() {
   }
 
   // Safe 地址变化 -> 只提示，不自动绑定
-  $('safe').addEventListener('change', () => {
+  $('safe')?.addEventListener('change', () => {
     log('Safe 地址已修改：点击“绑定合约”以生效');
   });
+
+  // ✅ 如果 URL 带 #tx=... 深链，自动解析填充
+  try {
+    const m = (location.hash || '').match(/[#&]tx=([^&]+)/);
+    if (m) {
+      const b64 = m[1];
+
+      // base64url → payload（这里直接本地解码即可）
+      const b64urlDecode = (str) => {
+        const b64 = str.replace(/-/g,'+').replace(/_/g,'/');
+        const pad = b64.length % 4 ? '='.repeat(4 - (b64.length % 4)) : '';
+        const bin = atob(b64 + pad);
+        const arr = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+        return arr.buffer;
+      };
+      const json = new TextDecoder().decode(b64urlDecode(b64));
+      const payload = JSON.parse(json);
+
+      // 生成带 SHA-256 的分享串（复用你的导入流程与校验）
+      const { makeShareString } = await import('./share.js');
+      const { share } = await makeShareString(payload);
+      $('importStr').value = share;
+
+      // 建议 await 保证填充完成再让用户操作
+      await onImportStr();
+    }
+  } catch (_) {
+    // 静默忽略深链解析错误，避免影响正常使用
+  }
 }
+
+// ✅ 确保在 DOMReady 后调用，并捕获潜在错误写入日志
+document.addEventListener('DOMContentLoaded', () => {
+  main().catch(e => log(e?.message || String(e), true));
+});
+
 
 document.addEventListener('DOMContentLoaded', main);

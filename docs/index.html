@@ -134,7 +134,6 @@
 </fieldset>
 
 
-
   <fieldset>
     <legend>读取配置</legend>
     <div class="row">
@@ -221,6 +220,35 @@
     </div>
     <textarea id="approvalsBox" rows="4" readonly class="hint" style="width:100%;margin-top:6px;font-family:monospace"></textarea>
   </fieldset>
+
+  <!-- ✅ 新增：共享 / 导入（插在这里） -->
+  <fieldset>
+  <legend>共享 / 导入（第二人用）</legend>
+
+  <div class="row">
+    <div>
+      <label>分享字符串（复制给第二人）</label>
+      <textarea id="shareStr" rows="4" readonly placeholder="点击生成 → 可复制或做深链/文件"></textarea>
+      <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
+        <button id="btnBuildShare" class="secondary">生成分享字符串</button>
+        <button id="btnCopyShare" class="secondary">复制字符串</button>
+        <button id="btnMakeLink" class="secondary">复制深链</button>
+        <button id="btnDownloadShare" class="secondary">下载 JSON 文件</button>
+      </div>
+      <div id="shareInfo" class="hint" style="margin-top:6px"></div>
+    </div>
+
+    <div>
+      <label>导入字符串（第二人在任意机器粘贴）</label>
+      <textarea id="importStr" rows="4" placeholder="粘贴 SAFE1.xxxxx"></textarea>
+      <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
+        <button id="btnImportStr" class="secondary">解析并填充</button>
+      </div>
+      <div class="hint">解析后会自动切链、填充参数、并校验 safeTxHash</div>
+    </div>
+  </div>
+</fieldset>
+
 
   <!-- ✅ 新增：预验证（插在这里） -->
   <fieldset>
