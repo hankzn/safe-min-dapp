@@ -111,21 +111,27 @@
     <button id="btnSwitch" class="secondary">切换网络</button>
   </fieldset>
 
+  <!-- ✅ 新增：连接（插在这里） -->
   <fieldset>
-    <legend>连接</legend>
-    <div class="row">
-      <div>
-        <label>Safe 地址（你的 Safe 代理合约）</label>
-        <input id="safe" placeholder="0xYourSafeAddress" />
-      </div>
-      <div>
-        <label>当前链信息</label>
-        <input id="chain" disabled />
-      </div>
+  <legend>连接</legend>
+  <div class="row">
+    <div>
+      <label>Safe 地址（你的 Safe 代理合约）</label>
+      <input id="safe" placeholder="0xYourSafeAddress" />
     </div>
-    <button id="btnConnect">连接钱包</button>
-    <span id="acct" class="hint"></span>
-  </fieldset>
+    <div>
+      <label>当前链信息</label>
+      <input id="chain" disabled />
+    </div>
+  </div>
+
+  <!-- 加这两个按钮：先“连接钱包”，再可“切换账号” -->
+  <button id="btnConnect">连接钱包</button>
+  <button id="btnSwitchAccount" class="secondary">切换账号</button>
+
+  <span id="acct" class="hint"></span>
+</fieldset>
+
 
   <fieldset>
     <legend>读取配置</legend>
