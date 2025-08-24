@@ -6,6 +6,7 @@ import { connectWallet, getProvider, getSigner, disconnectWallet } from './walle
 import { bindSafe, unbindSafe, readThreshold, readNonce, getTransactionHash, approveHash, execTransaction, readOwners, getApprovalsForHash } from './safe.js';
 import { switchOrAdd, CHAINS } from './chains.js';
 import { openConfirmTwoStep } from './confirm.js';
+import { normalizeApprovedListFromPayload } from './share.js';
 
 // ====== 全局状态：地址/金额确认，高级参数锁定、批准缓存 ======
 let toConfirmed = false;
@@ -318,22 +319,33 @@ async function onExec() {
 // ====== 共享 ======
 async function onBuildShare() {
   try {
-    // 确保已有 hash（也会检查地址/金额确认）
+    // 1) 确保有安全参数和本地 safeTxHash
     const { hash, params } = await ensureSafeTxHash();
 
-    // 取阈值 & 当前 signer（可选）
+    // 2) 阈值 / signer / 链信息
     let th = $('threshold').value;
     if (!th) th = await readThreshold();
     let signerAddr = null;
     try { signerAddr = await getSigner().getAddress(); } catch {}
 
-    // 链信息
     const provider = getProvider() || (getSigner() && getSigner().provider);
     const net = provider ? await provider.getNetwork() : { chainId: NaN };
     const chainIdNum = Number(net.chainId);
     const cinfo = chainInfoById(chainIdNum);
 
-    // 规范化载荷
+    // 3) 已批准列表：优先用缓存；没有就链上现查；再不行才退化用 signer
+    let approvedByList = approvalsCache?.approvedOwners || [];
+    if (!approvedByList?.length) {
+      try {
+        const { approvedOwners } = await getApprovalsForHash(hash);
+        approvedByList = approvedOwners;
+      } catch (_) {}
+    }
+    if (!approvedByList?.length && signerAddr) {
+      approvedByList = [signerAddr];
+    }
+
+    // 4) 构建 v2 载荷（带 approvedByList）
     const payload = buildCanonicalPayload({
       chainId: chainIdNum,
       chainName: cinfo.chainName,
@@ -341,14 +353,15 @@ async function onBuildShare() {
       tx: params,
       safeTxHash: hash,
       threshold: th,
-      approvedBy: signerAddr || ''
+      approvedByList
     });
 
-    // 生成分享串 & 指纹
-    const { share, sha256, json } = await makeShareString(payload);
+    const { share, sha256 } = await makeShareString(payload);
     $('shareStr').value = share;
-    $('shareInfo').textContent = `SHA-256=${sha256.slice(0,16)}…  长度=${share.length}  （已包含 chainId / safe / 全部参数 / safeTxHash）`;
-    log('已生成分享字符串；可复制或下载文件/深链');
+
+    const who = (approvedByList || []).length ? `，已批准：${approvedByList.join(',')}` : '';
+    $('shareInfo').textContent = `SHA-256=${sha256.slice(0,16)}…  长度=${share.length}${who}`;
+    log('已生成分享字符串（包含已批准列表）');
   } catch (e) { log(e.message || String(e), true); }
 }
 async function onCopyShare() {
@@ -372,11 +385,12 @@ async function onImportStr() {
   try {
     const s = $('importStr').value.trim();
     if (!s) { log('请粘贴分享字符串 SAFE1.…', true); return; }
+
     const { payload, sha256 } = await parseShareString(s);
 
     // 1) 切链（如果我们支持该链）
-    const chainIdNum = Number(payload.chain?.chainId || '0');
-    const match = Object.entries(CHAINS).find(([k,v]) => parseInt(v.chainId,16) === chainIdNum);
+    const chainIdNum = Number(payload.chain?.chainId || 0);
+    const match = Object.entries(CHAINS).find(([_, v]) => parseInt(v.chainId, 16) === chainIdNum);
     if (match) {
       await switchOrAdd(match[0]);
       $('chain').value = `${match[1].chainName} (chainId=${chainIdNum})`;
@@ -392,29 +406,52 @@ async function onImportStr() {
     // 3) 填充交易参数
     const t = payload.tx || {};
     $('to').value = t.to || '';
-    $('amountEth').value = (window.ethers && t.valueWei) ? ethers.utils.formatEther(t.valueWei) : '';
+    $('amountEth').value = (window.ethers && t.valueWei != null) ? ethers.utils.formatEther(t.valueWei) : '';
     $('data').value = t.data || '0x';
-    $('operation').value = t.operation || '0';
-    $('safeTxGas').value = t.safeTxGas || '0';
-    $('baseGas').value = t.baseGas || '0';
-    $('gasPrice').value = t.gasPrice || '0';
-    $('gasToken').value = t.gasToken || '0x0000000000000000000000000000000000000000';
-    $('refundReceiver').value = t.refundReceiver || '0x0000000000000000000000000000000000000000';
-    $('nonce').value = t.nonce || '';
+    $('operation').value = t.operation ?? '0';
+    $('safeTxGas').value = t.safeTxGas ?? '0';
+    $('baseGas').value = t.baseGas ?? '0';
+    $('gasPrice').value = t.gasPrice ?? '0';
+    $('gasToken').value = t.gasToken ?? '0x0000000000000000000000000000000000000000';
+    $('refundReceiver').value = t.refundReceiver ?? '0x0000000000000000000000000000000000000000';
+    $('nonce').value = t.nonce ?? '';
 
     // 4) 设为已确认（来自可信载荷），并更新提示
     toConfirmed = !!t.to; updateToStatus();
-    amountConfirmed = !!t.valueWei; updateAmountStatus();
+    amountConfirmed = t.valueWei != null; updateAmountStatus();
 
-    // 5) 计算本地 hash 与载荷的 safeTxHash 一致性校验
-    const { hash: localHash } = await ensureSafeTxHash();
-    if ((payload.safeTxHash || '').toLowerCase() !== (localHash||'').toLowerCase()) {
-      log('警告：载荷 safeTxHash 与本地计算不一致，请勿继续！', true);
-    } else {
-      $('safeTxHash').value = localHash;
-      log(`已导入并校验成功（SHA-256 前缀 ${sha256.slice(0,16)}…）`);
+    // 5) 尝试自动绑定（若已连接钱包），用于本地校验 safeTxHash
+    const sp = getSigner() || getProvider();
+    if (sp && payload.safe) {
+      try { bindSafe(payload.safe, sp); } catch (_) {}
     }
-  } catch (e) { log(e.message || String(e), true); }
+
+    // 6) 计算并校验 safeTxHash（若未连接/未绑定，会给出友好提示）
+    try {
+      const { hash: localHash } = await ensureSafeTxHash();
+      $('safeTxHash').value = localHash;
+      if ((payload.safeTxHash || '').toLowerCase() !== (localHash || '').toLowerCase()) {
+        log('警告：载荷 safeTxHash 与本地计算不一致，请勿继续！', true);
+      } else {
+        log(`已导入并校验成功（SHA-256 前缀 ${sha256.slice(0,16)}…）`);
+      }
+    } catch (e) {
+      log('已完成参数填充，但尚未校验 safeTxHash：请先“连接钱包并绑定合约”，再点一次“解析并填充”。', true);
+    }
+
+    // 7) 显示分享中声称的已批准列表（仅提示；以链上为准）
+    try {
+      const importedApproved = normalizeApprovedListFromPayload(payload);
+      if (importedApproved.length) {
+        log('分享信息显示已批准（未必最新）：' + importedApproved.join(','));
+      }
+    } catch (_) {}
+
+    // 引导用户拉取链上真值
+    log('建议点击“刷新批准状态”，以链上实际为准');
+  } catch (e) {
+    log(e.message || String(e), true);
+  }
 }
 async function onMakeLink() {
   try {

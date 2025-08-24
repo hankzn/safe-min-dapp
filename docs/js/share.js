@@ -2,7 +2,7 @@
 /* global crypto */
 import { ensure0x } from './utils.js';
 
-// base64url 编解码
+// ---------- 小工具 ----------
 const te = new TextEncoder();
 const td = new TextDecoder();
 function b64urlEncode(buf){
@@ -21,37 +21,58 @@ async function sha256Hex(bytes){
   const buf = await crypto.subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
 }
+const normAddr = a => (a||'').toLowerCase();
+const uniqSortAddr = (arr=[]) => Array.from(new Set(arr.filter(Boolean).map(normAddr))).sort();
 
-// 规范化载荷（字段顺序固定，类型统一为字符串/小写）
-export function buildCanonicalPayload({ chainId, chainName, safe, tx, safeTxHash, threshold, approvedBy }) {
-  const p = {
-    v: '1',
-    ts: new Date().toISOString(),
-    chain: {
-      chainId: String(chainId),
-      chainName: chainName || ''
-    },
-    safe: (safe||'').toLowerCase(),
-    tx: {
-      to: (tx.to||'').toLowerCase(),
-      valueWei: String(tx.valueWei||'0'),
-      data: ensure0x(tx.data||'0x'),
-      operation: String(tx.operation||0),
-      safeTxGas: String(tx.safeTxGas||'0'),
-      baseGas: String(tx.baseGas||'0'),
-      gasPrice: String(tx.gasPrice||'0'),
-      gasToken: (tx.gasToken||'0x0000000000000000000000000000000000000000').toLowerCase(),
-      refundReceiver: (tx.refundReceiver||'0x0000000000000000000000000000000000000000').toLowerCase(),
-      nonce: String(tx.nonce||'')
-    },
-    safeTxHash: ensure0x(safeTxHash||'0x'),
-    threshold: threshold ? String(threshold) : '',
-    approvedBy: approvedBy ? String(approvedBy).toLowerCase() : ''
-  };
-  return p; // 插入顺序就是 JSON.stringify 的键序
+// ---------- 兼容：把 payload 中的单个 approvedBy/数组 approvedByList 统一成数组 ----------
+export function normalizeApprovedListFromPayload(payload){
+  const v1 = payload?.approvedBy ? [payload.approvedBy] : [];
+  const v2 = Array.isArray(payload?.approvedByList) ? payload.approvedByList : [];
+  return uniqSortAddr([...v1, ...v2]);
 }
 
-// 生成分享字符串： SAFE1.<base64url(JSON)>.<sha256(JSON)>
+// ---------- 构建“规范化载荷”（v2） ----------
+/**
+ * 入参：{ chainId, chainName, safe, tx, safeTxHash, threshold, approvedByList? }
+ * - 地址统一 lowerCase
+ * - 数字转字符串
+ * - 字段顺序固定，便于签名/哈希稳定
+ * - v: '2'（兼容保留 approvedBy: '' 字段，便于旧版解析）
+ */
+export function buildCanonicalPayload({ chainId, chainName, safe, tx, safeTxHash, threshold, approvedByList }) {
+  const approvedList = uniqSortAddr(approvedByList || []);
+
+  const p = {
+    v: '2',
+    ts: new Date().toISOString(),
+    chain: {
+      chainId: String(chainId ?? ''),
+      chainName: chainName || ''
+    },
+    safe: normAddr(safe),
+    tx: {
+      to: normAddr(tx?.to),
+      valueWei: String(tx?.valueWei ?? '0'),
+      data: ensure0x(tx?.data ?? '0x'),
+      operation: String(tx?.operation ?? 0),
+      safeTxGas: String(tx?.safeTxGas ?? '0'),
+      baseGas: String(tx?.baseGas ?? '0'),
+      gasPrice: String(tx?.gasPrice ?? '0'),
+      gasToken: normAddr(tx?.gasToken ?? '0x0000000000000000000000000000000000000000'),
+      refundReceiver: normAddr(tx?.refundReceiver ?? '0x0000000000000000000000000000000000000000'),
+      nonce: String(tx?.nonce ?? '')
+    },
+    safeTxHash: ensure0x(safeTxHash || '0x'),
+    threshold: threshold ? String(threshold) : '',
+    // v2 新增：多人
+    approvedByList: approvedList,
+    // 兼容 v1：保留一个空串字段，旧版读取不报错
+    approvedBy: approvedList[0] || ''
+  };
+  return p;
+}
+
+// ---------- 分享串 SAFE1.<b64url(JSON)>.SHA256 ----------
 export async function makeShareString(payload){
   const json = JSON.stringify(payload);
   const hash = await sha256Hex(te.encode(json));
@@ -59,7 +80,7 @@ export async function makeShareString(payload){
   return { share: `SAFE1.${b64}.${hash}`, sha256: hash, json };
 }
 
-// 解析分享字符串并校验 SHA-256
+// ---------- 解析分享串并校验 ----------
 export async function parseShareString(str){
   if (!/^SAFE1\./.test(str)) throw new Error('格式不对，缺少 SAFE1 前缀');
   const parts = str.split('.');
@@ -70,20 +91,24 @@ export async function parseShareString(str){
   const calc = (await sha256Hex(te.encode(json))).toLowerCase();
   if (calc !== given) throw new Error('指纹校验失败：内容可能被篡改');
   const payload = JSON.parse(json);
+  // 回填：老版本载荷没有 approvedByList，就从 approvedBy 补
+  if (!Array.isArray(payload.approvedByList)) {
+    payload.approvedByList = normalizeApprovedListFromPayload(payload);
+  }
   return { payload, sha256: calc };
 }
 
-// 生成深链：把 base64url(JSON) 放到 hash，不经由服务端日志
+// ---------- 深链 ----------
 export function makeDeepLink(payload){
   const json = JSON.stringify(payload);
   const b64 = b64urlEncode(te.encode(json));
-  const url = `${location.origin}${location.pathname}#tx=${b64}`;
-  return url;
+  return `${location.origin}${location.pathname}#tx=${b64}`;
 }
 
-// 下载 JSON 文件（内含 sha256 指纹）
+// ---------- 下载 JSON（带 SHA-256 指纹） ----------
 export async function downloadShareFile(payload){
-  const json = JSON.stringify({ ...payload, sha256: await sha256Hex(te.encode(JSON.stringify(payload))) }, null, 2);
+  const pure = JSON.stringify(payload);
+  const json = JSON.stringify({ ...payload, sha256: await sha256Hex(te.encode(pure)) }, null, 2);
   const blob = new Blob([json], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
