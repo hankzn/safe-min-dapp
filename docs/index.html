@@ -25,6 +25,7 @@
 <!-- 你的应用脚本（ESM 模块） -->
 <script src="vendor/qrcode.min.js"></script>
 <script type="module" src="js/app.js"></script>
+<script src="js/sop.js" defer></script>  <!-- 或不写 defer 也行，内部已等 DOMContentLoaded -->
 
 <style>
   body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:24px;line-height:1.4;}
@@ -85,9 +86,153 @@
   #qrBox{width:256px;height:256px;margin:auto}
   #qrMeta{font-size:12px;color:#666;text-align:center;margin-top:8px}
 
+  /* —— 签名模式：对齐与高亮 —— */
+  .sig-option{
+    display:flex; align-items:center; gap:8px;
+    line-height:1.2; margin:6px 0;
+  }
+  .sig-option input[type="radio"]{
+    margin:0; width:16px; height:16px;
+    /* 让圆点颜色与主题一致（现代浏览器支持） */
+    accent-color:#1f6feb;
+    transform: translateY(1px); /* 细调垂直对齐 */
+  }
+  .sig-option span{ display:inline-block; }
+
+  /* fieldset 高亮 */
+  .sigmode{
+    border:2px solid #e0e7ff;        /* 默认浅蓝边 */
+    background:#f8fbff;              /* 淡背景 */
+    border-radius:10px;
+    box-shadow:0 1px 0 rgba(0,0,0,.02) inset;
+  }
+  .sigmode legend{
+    font-weight:700; color:#153e75;
+  }
+
+  /* 右侧提醒块更像卡片 */
+  .sig-hint{
+    background:#fff; border:1px dashed #cfe3ff;
+    padding:8px 10px; border-radius:8px; margin-top:6px;
+  }
+
+  /* 选中“离线签名”时更突出 */
+  .sigmode.is-offline{
+    border-color:#0a7f1f;
+    box-shadow:0 0 0 3px rgba(10,127,31,.08) inset;
+  }
+  .sigmode.is-offline legend{ color:#0a7f1f; }
+  .sigmode.is-offline .sig-option input[type="radio"]{ accent-color:#0a7f1f; }
+
+  /* 小屏单列布局更整齐 */
+  @media (max-width: 720px){
+    .sigmode .row{ grid-template-columns: 1fr !important; }
+  }
+
+  /* —— SOP 悬浮按钮与弹窗 —— */
+  #sopFab{
+    position:fixed; right:18px; bottom:18px; z-index:2500;
+    width:56px; height:56px; border-radius:50%;
+    border:none; cursor:pointer; font-weight:700; font-size:14px;
+    background:#0a7f1f; color:#fff; box-shadow:0 8px 20px rgba(0,0,0,.18);
+  }
+  #sopFab:hover{ filter:brightness(1.05); transform:translateY(-1px); }
+
+  #sopOverlay{ position:fixed; inset:0; background:rgba(0,0,0,.45);
+    display:none; align-items:center; justify-content:center; z-index:2501; }
+  #sopCard{
+    background:#fff; color:#111; width:min(920px,92vw); max-height:88vh; overflow:auto;
+    border-radius:14px; padding:18px 20px; box-shadow:0 16px 40px rgba(0,0,0,.25);
+  }
+  #sopCard h2{ margin:6px 0 10px; font-size:20px; }
+  #sopCard h3{ margin:16px 0 8px; font-size:16px; }
+  #sopCard .badge{ display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:700; }
+  .badge-ok{ background:#e9f7ef; color:#0a7f1f; border:1px solid #bfe6cb; }
+  .badge-warn{ background:#fff7e6; color:#a15c00; border:1px solid #ffd79b; }
+  .badge-tip{ background:#eef2ff; color:#153e75; border:1px solid #c7d2fe; }
+
+  #sopCard ol{ padding-left:20px; }
+  #sopCard li{ margin:6px 0; }
+  #sopClose{ border:0; background:#555; color:#fff; border-radius:8px; padding:6px 10px; cursor:pointer; }
+  #sopClose:hover{ filter:brightness(1.1); }
+  #sopTopbar{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px; }
+  #sopTopbar .right{ display:flex; gap:8px; align-items:center; }
+  #sopTips{ font-size:12px; color:#666; }
+
+  @media (max-width:640px){
+    #sopCard{ width:94vw; padding:14px; }
+  }
 
 </style>
 </head>
+
+<!-- 🧭 SOP 悬浮按钮 -->
+<button id="sopFab" title="操作流程">SOP</button>
+
+<!-- 🧭 SOP 弹窗 -->
+<div id="sopOverlay" role="dialog" aria-modal="true">
+  <div id="sopCard">
+    <div id="sopTopbar">
+      <h2>Safe 操作 SOP <span class="badge badge-ok">推荐：离线签名</span></h2>
+      <div class="right">
+        <button id="sopClose">关闭</button>
+      </div>
+    </div>
+    <div id="sopTips" class="hint">建议按顺序执行；遇到问题见文末“常见问题 & 安全清单”。</div>
+
+    <h3>一、准备</h3>
+    <ol>
+      <li>安装并解锁浏览器钱包（MetaMask / Rabby 等）。</li>
+      <li>在本页 <b>连接钱包</b> → <b>选择网络</b>（ETH/Arbitrum/BNB 等）→ <b>绑定 Safe 合约</b>。</li>
+      <li>点击 <b>读取 threshold / nonce</b>，确认 <code>阈值</code> 与 <code>nonce</code>。</li>
+    </ol>
+
+    <h3>二、填写并确认交易参数</h3>
+    <ol>
+      <li>填写收款地址、金额、data 等；<b>先后点击“确认地址 / 确认金额”</b>锁定。</li>
+      <li>点击 <b>计算 safeTxHash</b>；如需多人操作，使用“共享/二维码/文件”把参数分发。</li>
+    </ol>
+
+    <h3>三、离线签名模式（<span class="badge badge-ok">推荐</span>）</h3>
+    <ol>
+      <li>在“签名模式”选择 <b>离线签名（EIP-712）</b>。</li>
+      <li>每位 Owner：点击 <b>我来签</b>（或粘贴签名），面板会<b>验签 + 去重</b>。</li>
+      <li>收集到 ≥ 阈值后，点击 <b>执行（execTransaction）</b>，核对二次确认弹窗与钱包内容一致 → 签名 → 等回执。</li>
+    </ol>
+
+    <h3>四、在线批准模式（approveHash 上链）</h3>
+    <ol>
+      <li>在“签名模式”选择 <b>在线批准</b>。</li>
+      <li>每位 Owner 点击 <b>approveHash</b> 并上链；随后点 <b>刷新批准状态</b> 查看 ✅ 列表。</li>
+      <li>当达到阈值，点 <b>根据批准状态生成 signatures</b> → <b>执行</b> → 等回执。</li>
+    </ol>
+
+    <h3>五、取消/作废当前交易（同 nonce）</h3>
+    <ol>
+      <li>点击 <b>准备取消交易（同 nonce 的空交易）</b>，系统会填充：to=Safe、自身、value=0、data=0x。</li>
+      <li><b>离线模式</b>：收集取消交易的离线签名到阈值后执行；<b>在线模式</b>：Owner 们对新 hash 执行 approveHash，达阈值后执行。</li>
+      <li><span class="badge badge-warn">注意</span> 谁先执行，谁吃掉 nonce；原交易自然失效。建议提高手续费优先级以确保取消优先上链。</li>
+    </ol>
+
+    <h3>六、共享与导入</h3>
+    <ol>
+      <li>点击 <b>生成分享字符串</b> 或 <b>显示二维码</b> 或 <b>下载 JSON</b>；内容自带 <b>SHA-256 指纹</b>。</li>
+      <li>第二人打开链接（或粘贴字符串/导入文件）→ 页面会自动<b>填充并本地重算 safeTxHash</b> 校验一致性。</li>
+      <li>导入后建议点击 <b>刷新批准状态</b>，以链上结果为准。</li>
+    </ol>
+
+    <h3>七、常见问题 & 安全清单</h3>
+    <ol>
+      <li><span class="badge badge-tip">核对</span> 二次确认弹窗与钱包弹窗：网络、Safe、收款地址、金额、data 字节数、nonce、safeTxHash。</li>
+      <li><span class="badge badge-tip">密钥安全</span> 本工具不会收集私钥/助记词；如任何页面要求填写助记词，立即关闭。</li>
+      <li><span class="badge badge-tip">阈值不足</span> 离线签名未达阈值或链上批准不足时，执行会被拒；先补齐再执行。</li>
+      <li><span class="badge badge-tip">网络不匹配</span> 钱包网络与页面显示不一致时，先切链；金额单位会随链自动切换。</li>
+      <li><span class="badge badge-tip">取消交易</span> 无法“撤回 approve”；使用“取消交易”同 nonce 吃掉当前 nonce。</li>
+      <li><span class="badge badge-tip">分享安全</span> 仅把参数/哈希分享给可信对象；离线签名只在临门时转交，避免被他人代执行。</li>
+    </ol>
+  </div>
+</div>
+
 <body>
   <h1>Safe 最简本地工具（MetaMask / 硬件钱包）</h1>
 
@@ -139,7 +284,7 @@
   <span id="acct" class="hint"></span>
 </fieldset>
 
-
+  <!-- ✅ 新增：读取（插在这里） -->
   <fieldset>
     <legend>读取配置</legend>
     <div class="row">
@@ -154,7 +299,7 @@
     </div>
     <button class="secondary" id="btnRead">读取 threshold / nonce</button>
   </fieldset>
-
+  <!-- ✅ 新增：计算参数（插在这里） -->
   <fieldset>
   <legend>转账参数（转原生 ETH 默认即可）</legend>
 
@@ -206,8 +351,39 @@
   <!-- 高级参数锁/解锁按钮在“计算”上方 -->
   <button id="btnToggleAdvanced" class="secondary">解锁高级参数</button>
   <button class="secondary" id="btnHash">计算 safeTxHash</button>
+  <button id="btnPrepareCancel" class="secondary">准备取消交易（同 nonce 的空交易）</button>
 </fieldset>
+  <!-- ✅ 新增：签名模式（插在这里） -->
+  <fieldset>
+    <legend>签名模式</legend>
+    <div class="row">
+      <div>
+        <label class="sig-option">
+          <input type="radio" name="sigMode" id="modeOnchain" checked>
+          <span>在线批准（approveHash 上链）</span>
+        </label>
+        <label class="sig-option">
+          <input type="radio" name="sigMode" id="modeOffline">
+          <span>离线签名（EIP-712，不上链收集）</span>
+        </label>
+      </div>
+      <div class="sig-hint hint">
+        推荐生产使用“离线签名”：不上链、可撤回、不暴露签名，临门一脚再执行。
+      </div>
+    </div>
 
+    <!-- 离线签名工具箱（只在离线模式显示） -->
+    <div id="offlineBox" style="display:none;margin-top:8px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button id="btnSignLocal" class="secondary">我来签（EIP-712）</button>
+        <button id="btnAddSig" class="secondary">粘贴签名</button>
+        <button id="btnClearSigs" class="secondary">清空签名</button>
+        <span id="sigSummary" class="hint" style="align-self:center"></span>
+      </div>
+      <textarea id="sigInput" rows="3" placeholder="可粘贴多条 0x… 签名，每行一条；系统会验签并去重"></textarea>
+      <textarea id="sigList" rows="4" readonly class="hint" style="font-family:monospace"></textarea>
+    </div>
+  </fieldset>
 
   <!-- ✅ 新增：批准（插在这里） -->
   <fieldset>

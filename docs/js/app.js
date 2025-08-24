@@ -15,6 +15,11 @@ let advancedUnlocked = false;
 let approvalsCache = { owners: [], approvedOwners: [], map: {} };
 const ADV_IDS = ['operation','safeTxGas','baseGas','gasPrice','gasToken','refundReceiver'];
 
+// —— 签名模式 & 离线签名收集 —— //
+let sigMode = 'onchain';                      // 'onchain' | 'offline'
+const offlineSigMap = Object.create(null);    // { ownerLower: 0x<rsv> }
+
+
 // ====== 工具与显示 ======
 function readParamsFromUI() {
   return {
@@ -267,24 +272,62 @@ function onGenSigManual() {
   } catch (e) { log(e.message || String(e), true); }
 }
 async function onExec() {
+  const btn = $('btnExec');           // 防重复点击
+  if (btn) btn.disabled = true;
+
   try {
     await ensureSafeTxHash();
-    const p = readParamsFromUI();
-    const sig = $('signatures').value.trim();
-    if (!sig) { log('请先生成 signatures（推荐：根据批准生成）', true); return; }
 
+    const p = readParamsFromUI();
+
+    // —— 选择 signatures（离线 / 在线）——
+    let sig = '';
+    let sigSource = '';
+    if (sigMode === 'offline') {
+      const th = Number($('threshold').value || await readThreshold());
+      const collected = Object.keys(offlineSigMap).length;
+      if (collected < th) {
+        log(`离线签名未达阈值：${collected}/${th}`, true);
+        return;
+      }
+      // 统一用已排序的地址重建拼接串，保证顺序正确
+      await rebuildOfflineSigUI();
+      sig = $('signatures').value.trim();
+      if (!/^0x([0-9a-f]{130})+$/i.test(sig)) {
+        log('离线 signatures 串无效（长度应为 0x + 130*N）', true);
+        return;
+      }
+      const n = (sig.length - 2) / 130;
+      sigSource = `离线 ECDSA × ${n}（按地址升序拼接）`;
+    } else {
+      // 在线模式：用“根据批准生成 signatures”或手动 owners→预验证签名
+      sig = $('signatures').value.trim();
+      if (!sig) {
+        log('请先生成 signatures（在线模式可用“根据批准状态生成”）', true);
+        return;
+      }
+      if (!/^0x([0-9a-f]{130})+$/i.test(sig)) {
+        log('signatures 串格式不正确（长度应为 0x + 130*N）', true);
+        return;
+      }
+      const n = (sig.length - 2) / 130;
+      sigSource = `预验证 signatures × ${n}`;
+    }
+
+    // —— 展示信息行 ——
     const provider = getProvider() || (getSigner() && getSigner().provider);
     const net = provider ? await provider.getNetwork() : { chainId: NaN };
     const chainIdNum = Number(net.chainId);
     const cinfo = chainInfoById(chainIdNum);
     const symbol = cinfo.nativeCurrency?.symbol || 'ETH';
-    const signerAddr = await getSigner().getAddress().catch(()=>null);
+    const signerAddr = await getSigner().getAddress().catch(() => null);
 
     const h = $('safeTxHash').value.trim();
     const safeAddr = $('safe').value.trim();
     const amountHuman = ($('amountEth').value || '0').trim();
     const dataBytes = p.data === '0x' ? 0 : Math.max(0, (p.data.length - 2) / 2);
     const opName = (p.operation === 0 ? 'CALL(0)' : p.operation === 1 ? 'DELEGATECALL(1)' : String(p.operation));
+    const sigCount = (sig.length - 2) / 130;
 
     const rows = [
       ['网络', `${cinfo.chainName} (chainId=${chainIdNum})`],
@@ -302,17 +345,72 @@ async function onExec() {
       ['refundReceiver', p.refundReceiver],
       ['nonce', p.nonce || '(自动)'],
       ['safeTxHash', h],
-      ['signatures 长度', String(sig.length)],
+      ['签名来源', sigSource],
+      ['签名条数', String(sigCount)],
     ];
+
     const { proceed, txPromise } = await openConfirmTwoStep(
       '请确认：执行 Safe 交易（execTransaction）',
       rows,
       () => execTransaction(p, sig)
     );
     if (!proceed) { log('已取消执行'); return; }
+
     log('已请求钱包，请在钱包里确认；确认后等待链上回执…');
     const rc = await txPromise;
     log('✓ 执行成功：' + rc.transactionHash);
+
+    // 成功后：离线模式可清理已收集签名，避免串台（可选）
+    if (sigMode === 'offline') {
+      clearOfflineSigs?.();
+    }
+  } catch (e) {
+    if (e?.code === 4001 || e?.code === 'ACTION_REJECTED') {
+      log('已取消：你在钱包里拒绝了本次执行。', true);
+    } else {
+      log(e.message || String(e), true);
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// ====== 取消交易 ======
+async function prepareCancelTxSameNonce() {
+  try {
+    const safeAddr = $('safe').value.trim();
+    if (!isHexAddress(safeAddr)) { log('请先填写有效的 Safe 地址', true); return; }
+
+    const n = await readNonce();
+    $('nonce').value = n;
+
+    $('to').value = safeAddr;
+    $('amountEth').value = '0';
+    $('data').value = '0x';
+    $('operation').value = '0';
+    $('safeTxGas').value = '0';
+    $('baseGas').value = '0';
+    $('gasPrice').value = '0';
+    $('gasToken').value = zeroAddr();
+    $('refundReceiver').value = zeroAddr();
+
+    toConfirmed = true;   updateToStatus();
+    amountConfirmed = true; updateAmountStatus();
+
+    const { hash } = await ensureSafeTxHash();
+    $('safeTxHash').value = hash;
+
+    // 离线模式下清空旧签名，避免串台；在线模式让你去“刷新批准状态”
+    clearOfflineSigs();
+
+    log({
+      prepared_cancel: true, nonce: n, to: safeAddr, value: '0', data: '0x', safeTxHash: hash
+    });
+    if (sigMode === 'offline') {
+      log('已准备取消交易（离线模式）：请收集离线签名达到阈值后执行。');
+    } else {
+      log('已准备取消交易（在线模式）：请让 Owner 对该 hash 执行 approveHash，达到阈值后执行。');
+    }
   } catch (e) { log(e.message || String(e), true); }
 }
 
@@ -495,6 +593,155 @@ function closeQR(){
   clearQR();
 }
 
+// ====== 构造 Safe EIP-712（离线签名用） ======
+async function buildTypedForCurrentTx() {
+  // 依赖：readParamsFromUI, readNonce, getTransactionHash
+  const safeAddr = $('safe').value.trim();
+  if (!isHexAddress(safeAddr)) throw new Error('请先填写有效的 Safe 地址');
+
+  const provider = getProvider() || (getSigner() && getSigner().provider);
+  if (!provider) throw new Error('请先连接钱包');
+
+  const net = await provider.getNetwork();
+  const chainIdNum = Number(net.chainId);
+
+  const p = readParamsFromUI();
+  if (!p.nonce) { p.nonce = await readNonce(); $('nonce').value = p.nonce; }
+
+  // 与合约 getTransactionHash 保持一致
+  const expectedHash = await getTransactionHash(p);
+
+  const domain = { verifyingContract: safeAddr, chainId: chainIdNum };
+  const types = {
+    SafeTx: [
+      { name:'to', type:'address' },
+      { name:'value', type:'uint256' },
+      { name:'data', type:'bytes' },
+      { name:'operation', type:'uint8' },
+      { name:'safeTxGas', type:'uint256' },
+      { name:'baseGas', type:'uint256' },
+      { name:'gasPrice', type:'uint256' },
+      { name:'gasToken', type:'address' },
+      { name:'refundReceiver', type:'address' },
+      { name:'nonce', type:'uint256' }
+    ]
+  };
+  const message = {
+    to: p.to, value: p.valueWei, data: p.data, operation: p.operation,
+    safeTxGas: p.safeTxGas, baseGas: p.baseGas, gasPrice: p.gasPrice,
+    gasToken: p.gasToken, refundReceiver: p.refundReceiver, nonce: p.nonce
+  };
+
+  // 仅用于 eth_signTypedData_v4 回退
+  const typedV4 = {
+    types: { EIP712Domain: [
+      { name:'verifyingContract', type:'address' },
+      { name:'chainId',           type:'uint256' }
+    ], ...types },
+    primaryType: 'SafeTx',
+    domain, message
+  };
+
+  return { domain, types, message, typedV4, expectedHash };
+}
+
+// ====== 离线签名：规范化 / 验签 / 收集 / 展示 ======
+function normalizeSigRSV(sig) {
+  if (!/^0x[0-9a-fA-F]+$/.test(sig)) throw new Error('签名格式错误');
+  let s = sig.toLowerCase();
+  if (s.length !== 132) throw new Error('签名长度非 65 字节');
+  let v = parseInt(s.slice(-2), 16);
+  if (v === 0 || v === 1) v += 27;
+  if (v !== 27 && v !== 28) throw new Error('签名 v 非 27/28/0/1');
+  s = s.slice(0, 130) + v.toString(16).padStart(2, '0'); // 27/28 规范化
+  return s;
+}
+async function ensureOwnersSet() {
+  const arr = await readOwners();
+  return new Set(arr.map(a => a.toLowerCase()));
+}
+async function addOfflineSigChecked(sig, typed) {
+  const s = normalizeSigRSV(sig);
+  const recovered = ethers.utils.verifyTypedData(typed.domain, typed.types, typed.message, s).toLowerCase();
+  const owners = await ensureOwnersSet();
+  if (!owners.has(recovered)) throw new Error(`签名者非 Safe Owner：${recovered}`);
+  offlineSigMap[recovered] = s; // 去重：地址唯一
+  return recovered;
+}
+async function rebuildOfflineSigUI() {
+  const owners = Object.keys(offlineSigMap).sort();
+  const th = Number($('threshold').value || await readThreshold());
+  const concat = '0x' + owners.map(o => offlineSigMap[o].slice(2)).join('');
+  $('signatures').value = concat; // 复用你的 signatures 文本框
+  $('sigList').value = owners.map(o => `✅ ${o}`).join('\n');
+  $('sigSummary').textContent = `已收集 ${owners.length} 条离线签名 / 阈值 ${th}`;
+}
+function clearOfflineSigs() {
+  for (const k of Object.keys(offlineSigMap)) delete offlineSigMap[k];
+  $('sigInput').value = '';
+  $('sigList').value = '';
+  $('sigSummary').textContent = '';
+  $('signatures').value = '';
+}
+
+// ====== 离线模式：按钮逻辑 ======
+async function onSignLocal() {
+  try {
+    await ensureSafeTxHash();                 // 确保 to/amount 已确认 & nonce 就绪
+    const typed = await buildTypedForCurrentTx();
+    const signer = getSigner(); if (!signer) throw new Error('请先连接钱包');
+
+    // 首选 _signTypedData（Ethers v5）
+    let sig;
+    try {
+      sig = await signer._signTypedData(typed.domain, typed.types, typed.message);
+    } catch {
+      // 回退 eth_signTypedData_v4
+      const provider = getProvider() || (signer && signer.provider);
+      const from = await signer.getAddress();
+      sig = await provider.send('eth_signTypedData_v4', [from, JSON.stringify(typed.typedV4)]);
+    }
+
+    const who = await addOfflineSigChecked(sig, typed);
+    await rebuildOfflineSigUI();
+    log(`已收集离线签名：${who}`);
+  } catch (e) { log(e.message || String(e), true); }
+}
+async function onAddSigPaste() {
+  try {
+    await ensureSafeTxHash();
+    const typed = await buildTypedForCurrentTx();
+    const lines = ($('sigInput').value || '').split('\n').map(s => s.trim()).filter(Boolean);
+    if (!lines.length) { log('请在输入框粘贴 0x… 签名（每行一条）', true); return; }
+    let ok = 0;
+    for (const line of lines) {
+      try { await addOfflineSigChecked(line, typed); ok++; }
+      catch (e) { log('忽略无效签名：' + (e.message || String(e)), true); }
+    }
+    await rebuildOfflineSigUI();
+    log(`已新增 ${ok} 条签名（自动去重）`);
+  } catch (e) { log(e.message || String(e), true); }
+}
+function onClearSigs() { clearOfflineSigs(); log('已清空离线签名'); }
+
+// ====== 模式切换 & UI 联动 ======
+function applySigModeUI() {
+  const offline = (sigMode === 'offline');
+  $('offlineBox').style.display = offline ? 'block' : 'none';
+  $('btnApprove') && ($('btnApprove').disabled = offline);
+  $('btnAutoSig') && ($('btnAutoSig').disabled = offline);
+
+  // ✅ 高亮签名模式区块
+  const fs = document.querySelector('fieldset.sigmode');
+  if (fs) {
+    fs.classList.toggle('is-offline', offline);
+  }
+}
+function onModeChange() {
+  sigMode = $('modeOffline').checked ? 'offline' : 'onchain';
+  applySigModeUI();
+  log('已切换签名模式：' + (sigMode === 'offline' ? '离线签名（EIP-712）' : '在线批准（approveHash）'));
+}
 
 
 // ====== 初始化与事件绑定 ======
@@ -539,6 +786,21 @@ async function main() {
   $('amountEth')?.addEventListener('input', () => {
     if (amountConfirmed){ amountConfirmed=false; updateAmountStatus(); log('金额已修改，需重新确认'); }
   });
+
+    // 模式切换
+  $('modeOnchain')?.addEventListener('change', onModeChange);
+  $('modeOffline')?.addEventListener('change', onModeChange);
+
+  // 离线签名按钮
+  $('btnSignLocal')?.addEventListener('click', onSignLocal);
+  $('btnAddSig')?.addEventListener('click', onAddSigPaste);
+  $('btnClearSigs')?.addEventListener('click', onClearSigs);
+
+  // 准备取消
+  $('btnPrepareCancel')?.addEventListener('click', prepareCancelTxSameNonce);
+
+  // 初始化一次 UI
+  applySigModeUI();
 
   // 钱包事件
   if (window.ethereum) {
@@ -608,6 +870,3 @@ async function main() {
 document.addEventListener('DOMContentLoaded', () => {
   main().catch(e => log(e?.message || String(e), true));
 });
-
-
-document.addEventListener('DOMContentLoaded', main);
