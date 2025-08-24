@@ -202,22 +202,43 @@
 </fieldset>
 
 
-
+  <!-- ✅ 新增：批准（插在这里） -->
   <fieldset>
     <legend>批准（每位 Owner 都要点一次）</legend>
     <p class="hint">确保当前连接的钱包就是某位 Owner。这个操作会发链上交易。</p>
     <button id="btnApprove">approveHash(safeTxHash)</button>
+
+    <!-- ✅ 新增：批准状态 -->
+    <div class="row" style="margin-top:8px">
+      <div>
+        <button id="btnRefreshApprovals" class="secondary">刷新批准状态</button>
+      </div>
+      <div>
+        <span id="approvalSummary" class="hint"></span>
+      </div>
+    </div>
+    <textarea id="approvalsBox" rows="4" readonly class="hint" style="width:100%;margin-top:6px;font-family:monospace"></textarea>
   </fieldset>
 
+  <!-- ✅ 新增：预验证（插在这里） -->
   <fieldset>
-    <legend>生成“预验证 signatures”并执行</legend>
-    <label>Owner 地址列表（逗号分隔；至少达到阈值个）</label>
-    <input id="owners" placeholder="0xOwner1,0xOwner2" />
-    <button class="secondary" id="btnSig">生成 signatures</button>
-    <textarea id="signatures" rows="3" placeholder="自动生成" readonly></textarea>
-    <p class="hint">提示：每个 Owner 65 字节；2 人应为 262 个字符（含 0x）。</p>
-    <button id="btnExec">execTransaction（payable amount 固定 0）</button>
-  </fieldset>
+  <legend>生成“预验证 signatures”并执行</legend>
+
+  <!-- 手动（保留，可选） -->
+  <label>Owner 地址列表（逗号分隔；至少达到阈值个）</label>
+  <input id="owners" placeholder="0xOwner1,0xOwner2" />
+  <div style="display:flex;gap:8px;margin-top:6px">
+    <button class="secondary" id="btnSig">手动生成 signatures</button>
+    <!-- ✅ 新增：自动 -->
+    <button class="secondary" id="btnAutoSig">根据批准状态生成 signatures</button>
+  </div>
+
+  <textarea id="signatures" rows="3" placeholder="自动生成" readonly style="margin-top:8px"></textarea>
+  <p class="hint">提示：每个 Owner 65 字节；2 人应为 262 个字符（含 0x）。</p>
+
+  <button id="btnExec">execTransaction（payable amount 固定 0）</button>
+</fieldset>
+
 
 </body>
 </html>

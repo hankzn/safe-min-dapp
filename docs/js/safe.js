@@ -23,8 +23,31 @@ export async function readNonce() {
   return (await getContract().nonce()).toString();
 }
 
+export async function readOwners() {
+  const arr = await getContract().getOwners();
+  return arr.map(a => a.toLowerCase());
+}
+
+export async function isOwner(addr) {
+  return await getContract().isOwner(addr);
+}
+
+export async function approvedValue(owner, hash) {
+  // returns string or BigNumber; normalize to boolean
+  const v = await getContract().approvedHashes(owner, hash);
+  return !ethers.BigNumber.from(v).isZero();
+}
+
+export async function getApprovalsForHash(hash) {
+  const owners = await readOwners();
+  const flags = await Promise.all(owners.map(o => approvedValue(o, hash)));
+  const approvedOwners = owners.filter((_, i) => flags[i]);
+  const map = {};
+  owners.forEach((o, i) => { map[o] = !!flags[i]; });
+  return { owners, approvedOwners, map };
+}
+
 export async function getTransactionHash(p) {
-  // 需要保证所有数值都是可被 ethers 识别的类型（string/BigNumber/number）
   return await getContract().getTransactionHash(
     p.to, p.valueWei, p.data, p.operation,
     p.safeTxGas, p.baseGas, p.gasPrice,

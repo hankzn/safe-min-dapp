@@ -2,6 +2,11 @@
 export const ABI = [
   {"inputs":[],"name":"nonce","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
   {"inputs":[],"name":"getThreshold","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
+  {"inputs":[],"name":"getOwners","outputs":[{"internalType":"address[]","name":"","type":"address[]"}],"stateMutability":"view","type":"function"},
+  {"inputs":[{"internalType":"address","name":"owner","type":"address"}],"name":"isOwner","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"view","type":"function"},
+  // public mapping accessor: approvedHashes(owner, hash) -> uint256
+  {"inputs":[{"internalType":"address","name":"","type":"address"},{"internalType":"bytes32","name":"","type":"bytes32"}],"name":"approvedHashes","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
+
   {"inputs":[
     {"internalType":"address","name":"to","type":"address"},
     {"internalType":"uint256","name":"value","type":"uint256"},
@@ -14,7 +19,9 @@ export const ABI = [
     {"internalType":"address","name":"refundReceiver","type":"address"},
     {"internalType":"uint256","name":"_nonce","type":"uint256"}],
     "name":"getTransactionHash","outputs":[{"internalType":"bytes32","name":"","type":"bytes32"}],"stateMutability":"view","type":"function"},
+
   {"inputs":[{"internalType":"bytes32","name":"hashToApprove","type":"bytes32"}],"name":"approveHash","outputs":[],"stateMutability":"nonpayable","type":"function"},
+
   {"inputs":[
     {"internalType":"address","name":"to","type":"address"},
     {"internalType":"uint256","name":"value","type":"uint256"},
