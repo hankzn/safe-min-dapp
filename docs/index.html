@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Safe 最简本地工具</title>
+
+<!-- GitHub Pages 场景下的 CSP（只允许本域脚本；不依赖外部 CDN） -->
+<meta http-equiv="Content-Security-Policy"
+      content="
+        default-src 'self';
+        base-uri 'none';
+        object-src 'none';
+        script-src 'self';
+        style-src 'self' 'unsafe-inline';
+        img-src 'self' data:;
+        connect-src 'self' https: wss:;
+        frame-ancestors 'none';
+        form-action 'self'">
+
+<meta name="referrer" content="no-referrer" />
+
+<!-- 自托管 ethers（UMD，挂到 window.ethers） -->
+<script src="vendor/ethers-5.7.2.umd.min.js"></script>
+<!-- 你的应用脚本（ESM 模块） -->
+<script type="module" src="js/app.js"></script>
+
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:24px;line-height:1.4;}
+  h1{font-size:20px;margin:0 0 12px;}
+  fieldset{border:1px solid #ddd;border-radius:8px;margin:12px 0;padding:12px;}
+  label{display:block;margin:8px 0 4px;font-size:13px;color:#333}
+  input,textarea{width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-family:monospace}
+  button{padding:8px 12px;border:0;border-radius:6px;background:#111;color:#fff;cursor:pointer;margin:6px 6px 0 0}
+  button.secondary{background:#555}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .hint{font-size:12px;color:#666}
+  .ok{color:#0a7f1f}
+  .err{color:#b00020;white-space:pre-wrap}
+  #log{white-space:pre-wrap;background:#fafafa;border:1px dashed #ccc;padding:10px;border-radius:6px;margin-top:8px}
+  small.code{font-family:monospace;background:#f2f2f2;border-radius:4px;padding:0 4px}
+</style>
+</head>
+<body>
+  <h1>Safe 最简本地工具（MetaMask / 硬件钱包）</h1>
+
+  <fieldset>
+    <legend>连接</legend>
+    <div class="row">
+      <div>
+        <label>Safe 地址（你的 Safe 代理合约）</label>
+        <input id="safe" placeholder="0xYourSafeAddress" />
+      </div>
+      <div>
+        <label>当前链信息</label>
+        <input id="chain" disabled />
+      </div>
+    </div>
+    <button id="btnConnect">连接钱包</button>
+    <span id="acct" class="hint"></span>
+  </fieldset>
+
+  <fieldset>
+    <legend>读取配置</legend>
+    <div class="row">
+      <div>
+        <label>阈值（getThreshold）</label>
+        <input id="threshold" disabled />
+      </div>
+      <div>
+        <label>nonce()</label>
+        <input id="nonce" placeholder="留空则自动读取" />
+      </div>
+    </div>
+    <button class="secondary" id="btnRead">读取 threshold / nonce</button>
+  </fieldset>
+
+  <fieldset>
+    <legend>转账参数（转原生 ETH 默认即可）</legend>
+    <div class="row">
+      <div>
+        <label>收款地址（to）</label>
+        <input id="to" placeholder="0xReceiver" />
+      </div>
+      <div>
+        <label>Amount (ETH)（自动换算为 wei）</label>
+        <input id="amountEth" placeholder="0.00002" />
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label>data（转原生 ETH 填 <small class="code">0x</small>）</label>
+        <input id="data" value="0x" />
+      </div>
+      <div>
+        <label>operation</label>
+        <input id="operation" value="0" />
+      </div>
+    </div>
+    <div class="row">
+      <div><label>safeTxGas</label><input id="safeTxGas" value="0" /></div>
+      <div><label>baseGas</label><input id="baseGas" value="0" /></div>
+    </div>
+    <div class="row">
+      <div><label>gasPrice</label><input id="gasPrice" value="0" /></div>
+      <div><label>gasToken</label><input id="gasToken" value="0x0000000000000000000000000000000000000000" /></div>
+    </div>
+    <div class="row">
+      <div><label>refundReceiver</label><input id="refundReceiver" value="0x0000000000000000000000000000000000000000" /></div>
+      <div><label>safeTxHash（自动计算）</label><input id="safeTxHash" disabled /></div>
+    </div>
+    <button class="secondary" id="btnHash">计算 safeTxHash</button>
+  </fieldset>
+
+  <fieldset>
+    <legend>批准（每位 Owner 都要点一次）</legend>
+    <p class="hint">确保当前连接的钱包就是某位 Owner。这个操作会发链上交易。</p>
+    <button id="btnApprove">approveHash(safeTxHash)</button>
+  </fieldset>
+
+  <fieldset>
+    <legend>生成“预验证 signatures”并执行</legend>
+    <label>Owner 地址列表（逗号分隔；至少达到阈值个）</label>
+    <input id="owners" placeholder="0xOwner1,0xOwner2" />
+    <button class="secondary" id="btnSig">生成 signatures</button>
+    <textarea id="signatures" rows="3" placeholder="自动生成" readonly></textarea>
+    <p class="hint">提示：每个 Owner 65 字节；2 人应为 262 个字符（含 0x）。</p>
+    <button id="btnExec">execTransaction（payable amount 固定 0）</button>
+  </fieldset>
+
+  <fieldset>
+    <legend>日志</legend>
+    <div id="log"></div>
+  </fieldset>
+</body>
+</html>
