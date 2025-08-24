@@ -4,21 +4,7 @@ import { $, log, ensure0x, toWeiFromEthStr, zeroAddr, isHexAddress, sortLowercas
 import { connectWallet, getProvider, getSigner } from './wallet.js';
 import { bindSafe, readThreshold, readNonce, getTransactionHash, approveHash, execTransaction } from './safe.js';
 import { switchOrAdd, CHAINS } from './chains.js';
-
-
-function setAmountSymbolByChainId(chainIdNum) {
-  // 默认 ETH
-  let symbol = 'ETH';
-  for (const k in CHAINS) {
-    const c = CHAINS[k];
-    if (parseInt(c.chainId, 16) === chainIdNum) {
-      symbol = c.nativeCurrency?.symbol || symbol;
-      break;
-    }
-  }
-  const el = $('amountLabel');
-  if (el) el.textContent = `Amount (${symbol})（自动换算为 wei）`;
-}
+import { openConfirmTwoStep } from './confirm.js';
 
 function readParamsFromUI() {
   return {
@@ -46,12 +32,40 @@ function genPrevalidatedSignatures(ownersStr) {
   return { owners, sig };
 }
 
+function setAmountSymbolByChainId(chainIdNum) {
+  let symbol = 'ETH';
+  for (const k in CHAINS) {
+    const c = CHAINS[k];
+    if (parseInt(c.chainId, 16) === chainIdNum) {
+      symbol = c.nativeCurrency?.symbol || symbol;
+      break;
+    }
+  }
+  const el = $('amountLabel');
+  if (el) el.textContent = `Amount (${symbol})（自动换算为 wei）`;
+}
+
+const shortHex = (hex, left = 10, right = 6) => {
+  const h = (hex || '').toString();
+  if (h.length <= left + right) return h;
+  return `${h.slice(0, left)}…${h.slice(-right)}`;
+};
+
+function chainInfoById(numId) {
+  for (const k in CHAINS) {
+    const c = CHAINS[k];
+    if (parseInt(c.chainId, 16) === numId) return c;
+  }
+  return { chainId: '0x' + numId.toString(16), chainName: `Unknown (${numId})`, nativeCurrency:{symbol:'ETH'} };
+}
+
 async function onConnect() {
   const res = await connectWallet();
   if (!res) return;
+  const cinfo = chainInfoById(Number(res.chainId));
   $('acct').textContent = `已连接：${res.account}`;
-  $('chain').value = `chainId=${res.chainId}`;
-  setAmountSymbolByChainId(res.chainId);   // ← 新增
+  $('chain').value = `${cinfo.chainName} (chainId=${Number(res.chainId)})`;
+  setAmountSymbolByChainId(Number(res.chainId));
   const addr = $('safe').value.trim();
   if (!addr) { log('请先填写 Safe 地址', true); return; }
   bindSafe(addr, getSigner() || getProvider());
@@ -80,9 +94,38 @@ async function onHash() {
 
 async function onApprove() {
   try {
-    const h = $('safeTxHash').value.trim();
-    if (!h) { log('请先计算 safeTxHash', true); return; }
-    const rc = await approveHash(h);
+    const provider = getProvider() || (getSigner() && getSigner().provider);
+    const net = provider ? await provider.getNetwork() : { chainId: NaN };
+    const chainIdNum = Number(net.chainId);
+    const cinfo = chainInfoById(chainIdNum);
+    const safeAddr = $('safe').value.trim();
+
+    // 确保有 safeTxHash
+    let h = $('safeTxHash').value.trim();
+    if (!h) {
+      const p = readParamsFromUI();
+      if (!p.nonce) { p.nonce = await readNonce(); $('nonce').value = p.nonce; }
+      h = await getTransactionHash(p);
+      $('safeTxHash').value = h;
+    }
+
+    const rows = [
+      ['网络', `${cinfo.chainName} (chainId=${chainIdNum})`],
+      ['操作', 'approveHash'],
+      ['Safe 地址', safeAddr],
+      ['safeTxHash', h],
+    ];
+
+    const { proceed, txPromise } = await openConfirmTwoStep(
+      '请确认：批准交易哈希（approveHash）',
+      rows,
+      () => approveHash(h) // 打开钱包并等待上链
+    );
+
+    if (!proceed) { log('已取消批准'); return; }
+
+    log('已请求钱包，请在钱包里确认；确认后等待链上回执…');
+    const rc = await txPromise;
     log('approveHash 确认：' + rc.transactionHash);
   } catch (e) { log(e.message || String(e), true); }
 }
@@ -101,7 +144,54 @@ async function onExec() {
     const p = readParamsFromUI();
     const sig = $('signatures').value.trim();
     if (!sig) { log('请先生成 signatures', true); return; }
-    const rc = await execTransaction(p, sig);
+
+    const provider = getProvider() || (getSigner() && getSigner().provider);
+    const net = provider ? await provider.getNetwork() : { chainId: NaN };
+    const chainIdNum = Number(net.chainId);
+    const cinfo = chainInfoById(chainIdNum);
+    const symbol = cinfo.nativeCurrency?.symbol || 'ETH';
+
+    // 计算/获取 safeTxHash
+    let h = $('safeTxHash').value.trim();
+    if (!h) {
+      if (!p.nonce) { p.nonce = await readNonce(); $('nonce').value = p.nonce; }
+      h = await getTransactionHash(p);
+      $('safeTxHash').value = h;
+    }
+
+    const safeAddr = $('safe').value.trim();
+    const amountHuman = ($('amountEth').value || '0').trim();
+    const dataBytes = p.data === '0x' ? 0 : Math.max(0, (p.data.length - 2) / 2);
+    const opName = (p.operation === 0 ? 'CALL(0)' : p.operation === 1 ? 'DELEGATECALL(1)' : String(p.operation));
+
+    const rows = [
+      ['网络', `${cinfo.chainName} (chainId=${chainIdNum})`],
+      ['操作', 'execTransaction'],
+      ['Safe 地址', safeAddr],
+      ['收款地址 to', p.to],
+      ['金额', `${amountHuman} ${symbol}（= ${p.valueWei} wei）`],
+      ['data', dataBytes === 0 ? '0x（无附加数据）' : `${shortHex(p.data)}（${dataBytes} bytes）`],
+      ['operation', opName],
+      ['safeTxGas', p.safeTxGas],
+      ['baseGas', p.baseGas],
+      ['gasPrice', p.gasPrice],
+      ['gasToken', p.gasToken],
+      ['refundReceiver', p.refundReceiver],
+      ['nonce', p.nonce || '(自动)'],
+      ['safeTxHash', h],
+      ['signatures 长度', String(sig.length)],
+    ];
+
+    const { proceed, txPromise } = await openConfirmTwoStep(
+      '请确认：执行 Safe 交易（execTransaction）',
+      rows,
+      () => execTransaction(p, sig) // 打开钱包并等待上链
+    );
+
+    if (!proceed) { log('已取消执行'); return; }
+
+    log('已请求钱包，请在钱包里确认；确认后等待链上回执…');
+    const rc = await txPromise;
     log('✓ 执行成功：' + rc.transactionHash);
   } catch (e) { log(e.message || String(e), true); }
 }
@@ -111,15 +201,14 @@ async function onSwitchNetwork() {
   try {
     await switchOrAdd(key);
     const c = CHAINS[key];
-    $('chain').value = `chainId=${parseInt(c.chainId, 16)} (${c.chainName})`;
-    setAmountSymbolByChainId(parseInt(c.chainId, 16));   // ← 新增
+    const cid = parseInt(c.chainId, 16);
+    $('chain').value = `${c.chainName} (chainId=${cid})`;
+    setAmountSymbolByChainId(cid);
     log('已切换到：' + c.chainName);
-    // 切链后你需要填/检查该链上的 Safe 地址
   } catch (e) { log(e.message || String(e), true); }
 }
 
 function main() {
-  // 事件绑定
   $('btnConnect').addEventListener('click', onConnect);
   $('btnRead').addEventListener('click', onRead);
   $('btnHash').addEventListener('click', onHash);
@@ -128,11 +217,12 @@ function main() {
   $('btnExec').addEventListener('click', onExec);
   $('btnSwitch').addEventListener('click', onSwitchNetwork);
 
-  // 监听钱包网络/账户变化
   if (window.ethereum) {
     window.ethereum.on('chainChanged', (hexId) => {
-      $('chain').value = `chainId=${parseInt(hexId, 16)}`;
-      setAmountSymbolByChainId(num);   // ← 新增
+      const num = parseInt(hexId, 16);
+      const cinfo = chainInfoById(num);
+      $('chain').value = `${cinfo.chainName} (chainId=${num})`;
+      setAmountSymbolByChainId(num);
       log('检测到网络切换：' + hexId);
     });
     window.ethereum.on('accountsChanged', (accts) => {
@@ -140,7 +230,6 @@ function main() {
     });
   }
 
-  // 切换 Safe 地址时，重新绑定
   $('safe').addEventListener('change', () => {
     const addr = $('safe').value.trim();
     if (!addr) { log('请先填写 Safe 地址', true); return; }
