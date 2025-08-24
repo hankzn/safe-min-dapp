@@ -39,11 +39,39 @@
   .err{color:#b00020;white-space:pre-wrap}
   #log{white-space:pre-wrap;background:#fafafa;border:1px dashed #ccc;padding:10px;border-radius:6px;margin-top:8px}
   small.code{font-family:monospace;background:#f2f2f2;border-radius:4px;padding:0 4px}
+
+  /* 让日志面板吸顶，始终可见 */
+  #logPanel {
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+    background: #fff;
+    box-shadow: 0 2px 0 rgba(0,0,0,0.04);
+    margin-bottom: 8px;   /* 让下面内容不被贴住 */
+  }
+
+  #log {
+    max-height: 200px;    /* 调成你喜欢的高度 */
+    overflow: auto;       /* 超出后内部滚动 */
+    white-space: pre-wrap;
+    background: #fafafa;
+    border: 1px dashed #ccc;
+    padding: 10px;
+    border-radius: 6px;
+    margin-top: 8px;
+  }
+
+
 </style>
 </head>
 <body>
   <h1>Safe 最简本地工具（MetaMask / 硬件钱包）</h1>
 
+  <!-- ✅ 日志：放在标题下方，并设置 id="logPanel" 以启用 sticky 吸顶 -->
+  <fieldset id="logPanel">
+    <legend>日志</legend>
+    <div id="log"></div>
+  </fieldset>
 
   <!-- ✅ 新增：网络（插在这里） -->
   <fieldset>
@@ -97,46 +125,56 @@
   </fieldset>
 
   <fieldset>
-    <legend>转账参数（转原生 ETH 默认即可）</legend>
-    <div class="row">
-      <div>
-        <label>收款地址（to）</label>
-        <div style="display:flex;gap:8px;align-items:center">
-          <input id="to" placeholder="0xReceiver" style="flex:1" />
-          <button id="btnConfirmTo" class="secondary">确认地址</button>
-        </div>
-        <div id="toStatus" class="hint"></div>
+  <legend>转账参数（转原生 ETH 默认即可）</legend>
+
+  <div class="row">
+    <!-- 收款地址 + 确认 -->
+    <div>
+      <label>收款地址（to）</label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input id="to" placeholder="0xReceiver" style="flex:1" />
+        <button id="btnConfirmTo" class="secondary">确认地址</button>
       </div>
-      <div>
-        <label id="amountLabel">Amount (ETH)（自动换算为 wei）</label>
-        <input id="amountEth" placeholder="0.00002" />
-      </div>
+      <div id="toStatus" class="hint"></div>
     </div>
-    <div class="row">
-      <div>
-        <label>data（转原生 ETH 填 <small class="code">0x</small>）</label>
-        <input id="data" value="0x" />
-      </div>
-      <div>
-        <label>operation</label>
-        <input id="operation" value="0" readonly />
-      </div>
+
+    <!-- ✅ 金额输入（这就是你说“没了”的那一行） -->
+    <div>
+      <label id="amountLabel">Amount (ETH)（自动换算为 wei）</label>
+      <input id="amountEth" placeholder="0.00002" />
     </div>
-    <div class="row">
-      <div><label>safeTxGas</label><input id="safeTxGas" value="0" readonly /></div>
-      <div><label>baseGas</label><input id="baseGas" value="0" readonly /></div>
+  </div>
+
+  <div class="row">
+    <div>
+      <label>data（转原生 ETH 填 <small class="code">0x</small>）</label>
+      <input id="data" value="0x" />
     </div>
-    <div class="row">
-      <div><label>gasPrice</label><input id="gasPrice" value="0" readonly /></div>
-      <div><label>gasToken</label><input id="gasToken" value="0x0000000000000000000000000000000000000000" readonly /></div>
+    <div>
+      <label>operation</label>
+      <input id="operation" value="0" readonly />
     </div>
-    <div class="row">
-      <div><label>refundReceiver</label><input id="refundReceiver" value="0x0000000000000000000000000000000000000000" readonly /></div>
-      <div><label>safeTxHash（自动计算）</label><input id="safeTxHash" disabled /></div>
-    </div>
-    <button id="btnToggleAdvanced" class="secondary">解锁高级参数</button>
-    <button class="secondary" id="btnHash">计算 safeTxHash</button>
-  </fieldset>
+  </div>
+
+  <div class="row">
+    <div><label>safeTxGas</label><input id="safeTxGas" value="0" readonly /></div>
+    <div><label>baseGas</label><input id="baseGas" value="0" readonly /></div>
+  </div>
+  <div class="row">
+    <div><label>gasPrice</label><input id="gasPrice" value="0" readonly /></div>
+    <div><label>gasToken</label><input id="gasToken" value="0x0000000000000000000000000000000000000000" readonly /></div>
+  </div>
+  <div class="row">
+    <div><label>refundReceiver</label><input id="refundReceiver" value="0x0000000000000000000000000000000000000000" readonly /></div>
+    <div><label>safeTxHash（自动计算）</label><input id="safeTxHash" disabled /></div>
+  </div>
+
+  <!-- 高级参数锁/解锁按钮（放在计算按钮上方） -->
+  <button id="btnToggleAdvanced" class="secondary">解锁高级参数</button>
+
+  <button class="secondary" id="btnHash">计算 safeTxHash</button>
+</fieldset>
+
 
   <fieldset>
     <legend>批准（每位 Owner 都要点一次）</legend>
@@ -154,9 +192,5 @@
     <button id="btnExec">execTransaction（payable amount 固定 0）</button>
   </fieldset>
 
-  <fieldset>
-    <legend>日志</legend>
-    <div id="log"></div>
-  </fieldset>
 </body>
 </html>
