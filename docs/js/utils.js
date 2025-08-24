@@ -3,14 +3,28 @@
 
 export const $ = (id) => document.getElementById(id);
 
+// docs/js/utils.js
 export function log(msg, isErr = false) {
-  const box = $('log');
+  const box = document.getElementById('log');
   if (!box) return;
+
+  const now = new Date();
+  const ts = now.toLocaleTimeString('zh-CN', { hour12: false }); // 如 14:05:09
+  const text = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2);
+
   const line = document.createElement('div');
   line.className = isErr ? 'err' : 'ok';
-  line.textContent = (typeof msg === 'string') ? msg : JSON.stringify(msg, null, 2);
+  line.textContent = `[${ts}] ${text}`;
   box.prepend(line);
+
+  // 只保留最新 N 条日志
+  const MAX = 200;
+  while (box.childElementCount > MAX) box.removeChild(box.lastChild);
+
+  // 最新在顶部 → 将滚动置顶
+  box.scrollTop = 0;
 }
+
 
 export function ensure0x(hex) {
   const h = (hex || '').trim();

@@ -40,6 +40,24 @@
   #log{white-space:pre-wrap;background:#fafafa;border:1px dashed #ccc;padding:10px;border-radius:6px;margin-top:8px}
   small.code{font-family:monospace;background:#f2f2f2;border-radius:4px;padding:0 4px}
 
+  /* 关键值：等宽、大字、强对比；确认后改为绿色底边框 */
+  .critical-input{
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-size: 16px;
+    letter-spacing: .3px;
+    background: #fffbe6;          /* 未确认：淡黄提醒 */
+    border: 2px solid #111;       /* 粗边框提高辨识 */
+    color: #111;
+  }
+  .critical-input.confirmed{
+    background: #e6fff2;          /* 已确认：淡绿 */
+    border-color: #0a7f1f;
+  }
+
+  /* 状态文案：未确认/已确认 */
+  .status-warn{ color:#b00020; }
+  .status-ok{ color:#0a7f1f; }
+
   /* 让日志面板吸顶，始终可见 */
   #logPanel {
     position: sticky;
@@ -132,16 +150,20 @@
     <div>
       <label>收款地址（to）</label>
       <div style="display:flex;gap:8px;align-items:center">
-        <input id="to" placeholder="0xReceiver" style="flex:1" />
+        <input id="to" class="critical-input" placeholder="0xReceiver" style="flex:1" />
         <button id="btnConfirmTo" class="secondary">确认地址</button>
       </div>
-      <div id="toStatus" class="hint"></div>
+      <div id="toStatus" class="hint status-warn">请填写后点击“确认地址”，未确认将无法计算/执行</div>
     </div>
 
-    <!-- ✅ 金额输入（这就是你说“没了”的那一行） -->
+    <!-- 金额 + 确认 -->
     <div>
       <label id="amountLabel">Amount (ETH)（自动换算为 wei）</label>
-      <input id="amountEth" placeholder="0.00002" />
+      <div style="display:flex;gap:8px;align-items:center">
+        <input id="amountEth" class="critical-input" placeholder="0.00002" style="flex:1" />
+        <button id="btnConfirmAmount" class="secondary">确认金额</button>
+      </div>
+      <div id="amountStatus" class="hint status-warn">请填写后点击“确认金额”，未确认将无法计算/执行</div>
     </div>
   </div>
 
@@ -155,7 +177,6 @@
       <input id="operation" value="0" readonly />
     </div>
   </div>
-
   <div class="row">
     <div><label>safeTxGas</label><input id="safeTxGas" value="0" readonly /></div>
     <div><label>baseGas</label><input id="baseGas" value="0" readonly /></div>
@@ -169,11 +190,11 @@
     <div><label>safeTxHash（自动计算）</label><input id="safeTxHash" disabled /></div>
   </div>
 
-  <!-- 高级参数锁/解锁按钮（放在计算按钮上方） -->
+  <!-- 高级参数锁/解锁按钮在“计算”上方 -->
   <button id="btnToggleAdvanced" class="secondary">解锁高级参数</button>
-
   <button class="secondary" id="btnHash">计算 safeTxHash</button>
 </fieldset>
+
 
 
   <fieldset>

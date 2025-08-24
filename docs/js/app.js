@@ -6,8 +6,9 @@ import { bindSafe, readThreshold, readNonce, getTransactionHash, approveHash, ex
 import { switchOrAdd, CHAINS } from './chains.js';
 import { openConfirmTwoStep } from './confirm.js';
 
-// === 新增：地址确认与高级参数锁定的状态 ===
+// 状态：地址/金额确认，高级参数锁定
 let toConfirmed = false;
+let amountConfirmed = false;
 let advancedUnlocked = false;
 const ADV_IDS = ['operation','safeTxGas','baseGas','gasPrice','gasToken','refundReceiver'];
 
@@ -64,24 +65,26 @@ function chainInfoById(numId) {
   return { chainId: '0x' + numId.toString(16), chainName: `Unknown (${numId})`, nativeCurrency:{symbol:'ETH'} };
 }
 
-// === 新增：控制 to 的确认/只读 与状态提示 ===
+// ===== 地址确认 =====
 function updateToStatus() {
   const st = $('toStatus');
   const input = $('to');
   if (toConfirmed) {
     input.readOnly = true;
+    input.classList.add('confirmed');
     st.textContent = '已确认收款地址（锁定，需更改请刷新页面）';
-    st.className = 'hint ok';
+    st.className = 'hint status-ok';
   } else {
     input.readOnly = false;
-    st.textContent = '请填写后点击“确认地址”，未确认将无法计算哈希/执行';
-    st.className = 'hint';
+    input.classList.remove('confirmed');
+    st.textContent = '请填写后点击“确认地址”，未确认将无法计算/执行';
+    st.className = 'hint status-warn';
   }
 }
 function confirmTo() {
   const addr = $('to').value.trim();
   if (!isHexAddress(addr)) {
-    log('收款地址格式不正确，请输入 0x 开头的 40 位十六进制地址', true);
+    log('收款地址格式不正确：需 0x 开头的 40 位十六进制地址', true);
     return;
   }
   toConfirmed = true;
@@ -89,22 +92,49 @@ function confirmTo() {
   log('已确认收款地址：' + addr);
 }
 
-// === 新增：高级参数锁/解锁 ===
+// ===== 金额确认 =====
+function updateAmountStatus() {
+  const st = $('amountStatus');
+  const input = $('amountEth');
+  if (amountConfirmed) {
+    input.readOnly = true;
+    input.classList.add('confirmed');
+    st.textContent = '已确认金额（锁定，需更改请刷新页面）';
+    st.className = 'hint status-ok';
+  } else {
+    input.readOnly = false;
+    input.classList.remove('confirmed');
+    st.textContent = '请填写后点击“确认金额”，未确认将无法计算/执行';
+    st.className = 'hint status-warn';
+  }
+}
+function confirmAmount() {
+  const val = ($('amountEth').value || '').trim();
+  try {
+    const wei = ethers.utils.parseEther(val); // 校验格式（>=0 的 18 位小数）
+    if (wei.lt(0)) throw new Error('金额必须 >= 0');
+  } catch (e) {
+    log('金额格式不正确：请输入形如 0.001 的数字（最多 18 位小数）', true);
+    return;
+  }
+  amountConfirmed = true;
+  updateAmountStatus();
+  log('已确认金额：' + val);
+}
+
+// ===== 高级参数锁/解锁 =====
 function setAdvancedReadonly(readonly) {
   ADV_IDS.forEach(id => { const el = $(id); if (el) el.readOnly = readonly; });
 }
 function toggleAdvanced() {
   const btn = $('btnToggleAdvanced');
   if (!advancedUnlocked) {
-    // 解锁前风险确认
-    const ok = window.confirm(
-      '解锁高级参数可能导致交易失败或资金风险。\n仅在你完全理解参数含义时再修改。\n是否确认解锁？'
-    );
+    const ok = window.confirm('解锁高级参数可能导致交易失败或资金风险。\n仅在完全理解参数意义时才修改。\n是否确认解锁？');
     if (!ok) return;
     advancedUnlocked = true;
     setAdvancedReadonly(false);
     if (btn) btn.textContent = '锁定高级参数';
-    log('已解锁高级参数，请谨慎修改！如无必要，建议保持默认 0 / 0x。');
+    log('已解锁高级参数，请谨慎修改！');
   } else {
     advancedUnlocked = false;
     setAdvancedReadonly(true);
@@ -113,7 +143,7 @@ function toggleAdvanced() {
   }
 }
 
-// ========== 交互主流程 ==========
+// ===== 业务流程 =====
 async function onConnect() {
   const res = await connectWallet();
   if (!res) return;
@@ -139,10 +169,8 @@ async function onRead() {
 
 async function onHash() {
   try {
-    if (!toConfirmed) {
-      log('未确认收款地址：请先点击“确认地址”锁定 to，再计算 safeTxHash。', true);
-      return;
-    }
+    if (!toConfirmed) { log('未确认收款地址：请先点击“确认地址”。', true); return; }
+    if (!amountConfirmed) { log('未确认金额：请先点击“确认金额”。', true); return; }
     const p = readParamsFromUI();
     if (!p.nonce) { p.nonce = await readNonce(); $('nonce').value = p.nonce; }
     const h = await getTransactionHash(p);
@@ -153,17 +181,15 @@ async function onHash() {
 
 async function onApprove() {
   try {
-    if (!toConfirmed) {
-      log('未确认收款地址：请先点击“确认地址”锁定 to，再批准。', true);
-      return;
-    }
+    if (!toConfirmed) { log('未确认收款地址：请先点击“确认地址”。', true); return; }
+    if (!amountConfirmed) { log('未确认金额：请先点击“确认金额”。', true); return; }
+
     const provider = getProvider() || (getSigner() && getSigner().provider);
     const net = provider ? await provider.getNetwork() : { chainId: NaN };
     const chainIdNum = Number(net.chainId);
     const cinfo = chainInfoById(chainIdNum);
     const safeAddr = $('safe').value.trim();
 
-    // 确保有 safeTxHash
     let h = $('safeTxHash').value.trim();
     if (!h) {
       const p = readParamsFromUI();
@@ -184,7 +210,6 @@ async function onApprove() {
       rows,
       () => approveHash(h)
     );
-
     if (!proceed) { log('已取消批准'); return; }
 
     log('已请求钱包，请在钱包里确认；确认后等待链上回执…');
@@ -204,10 +229,9 @@ function onGenSig() {
 
 async function onExec() {
   try {
-    if (!toConfirmed) {
-      log('未确认收款地址：请先点击“确认地址”锁定 to，再执行。', true);
-      return;
-    }
+    if (!toConfirmed) { log('未确认收款地址：请先点击“确认地址”。', true); return; }
+    if (!amountConfirmed) { log('未确认金额：请先点击“确认金额”。', true); return; }
+
     const p = readParamsFromUI();
     const sig = $('signatures').value.trim();
     if (!sig) { log('请先生成 signatures', true); return; }
@@ -218,7 +242,6 @@ async function onExec() {
     const cinfo = chainInfoById(chainIdNum);
     const symbol = cinfo.nativeCurrency?.symbol || 'ETH';
 
-    // 计算/获取 safeTxHash
     let h = $('safeTxHash').value.trim();
     if (!h) {
       if (!p.nonce) { p.nonce = await readNonce(); $('nonce').value = p.nonce; }
@@ -254,7 +277,6 @@ async function onExec() {
       rows,
       () => execTransaction(p, sig)
     );
-
     if (!proceed) { log('已取消执行'); return; }
 
     log('已请求钱包，请在钱包里确认；确认后等待链上回执…');
@@ -264,21 +286,24 @@ async function onExec() {
 }
 
 async function onSwitchNetwork() {
-  const key = $('netSelect').value; // ethereum / arbitrum / bsc
+  const key = $('netSelect').value;
   try {
     await switchOrAdd(key);
     const c = CHAINS[key];
     const cid = parseInt(c.chainId, 16);
     $('chain').value = `${c.chainName} (chainId=${cid})`;
     setAmountSymbolByChainId(cid);
+    // 切链后强制重新确认金额（单位不同更稳妥）
+    amountConfirmed = false; updateAmountStatus();
     log('已切换到：' + c.chainName);
   } catch (e) { log(e.message || String(e), true); }
 }
 
 function main() {
-  // 初始：高级参数保持只读；to 状态提示
+  // 初始状态
   setAdvancedReadonly(true);
   updateToStatus();
+  updateAmountStatus();
 
   // 事件绑定
   $('btnConnect').addEventListener('click', onConnect);
@@ -287,18 +312,21 @@ function main() {
   $('btnApprove').addEventListener('click', onApprove);
   $('btnSig').addEventListener('click', onGenSig);
   $('btnExec').addEventListener('click', onExec);
-
-  // 新增：按钮事件
-  $('btnConfirmTo').addEventListener('click', confirmTo);
   $('btnToggleAdvanced').addEventListener('click', toggleAdvanced);
+  $('btnConfirmTo').addEventListener('click', confirmTo);
+  $('btnConfirmAmount').addEventListener('click', confirmAmount);
 
-  // 监听钱包网络/账户变化
+  // 输入变更 → 取消确认（防止改了还锁着）
+  $('to').addEventListener('input', () => { if (toConfirmed){ toConfirmed=false; updateToStatus(); log('收款地址已修改，需重新确认'); }});
+  $('amountEth').addEventListener('input', () => { if (amountConfirmed){ amountConfirmed=false; updateAmountStatus(); log('金额已修改，需重新确认'); }});
+
   if (window.ethereum) {
     window.ethereum.on('chainChanged', (hexId) => {
       const num = parseInt(hexId, 16);
       const cinfo = chainInfoById(num);
       $('chain').value = `${cinfo.chainName} (chainId=${num})`;
       setAmountSymbolByChainId(num);
+      amountConfirmed = false; updateAmountStatus(); // 切链后需重新确认金额
       log('检测到网络切换：' + hexId);
     });
     window.ethereum.on('accountsChanged', (accts) => {
