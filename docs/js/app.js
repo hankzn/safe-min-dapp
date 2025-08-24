@@ -1,8 +1,8 @@
 // docs/js/app.js
 /* global ethers */
 import { $, log, ensure0x, toWeiFromEthStr, zeroAddr, isHexAddress, sortLowercaseAddresses } from './utils.js';
-import { connectWallet, getProvider, getSigner } from './wallet.js';
-import { bindSafe, readThreshold, readNonce, getTransactionHash, approveHash, execTransaction, readOwners, getApprovalsForHash } from './safe.js';
+import { connectWallet, getProvider, getSigner, disconnectWallet } from './wallet.js';
+import { bindSafe, unbindSafe, readThreshold, readNonce, getTransactionHash, approveHash, execTransaction, readOwners, getApprovalsForHash } from './safe.js';
 import { switchOrAdd, CHAINS } from './chains.js';
 import { openConfirmTwoStep } from './confirm.js';
 
@@ -10,7 +10,7 @@ import { openConfirmTwoStep } from './confirm.js';
 let toConfirmed = false;
 let amountConfirmed = false;
 let advancedUnlocked = false;
-let approvalsCache = { owners: [], approvedOwners: [], map: {} }; // 针对当前 safeTxHash
+let approvalsCache = { owners: [], approvedOwners: [], map: {} };
 const ADV_IDS = ['operation','safeTxGas','baseGas','gasPrice','gasToken','refundReceiver'];
 
 // ====== 工具与显示 ======
@@ -52,7 +52,7 @@ function chainInfoById(numId) {
   return { chainId: '0x' + numId.toString(16), chainName: `Unknown (${numId})`, nativeCurrency:{symbol:'ETH'} };
 }
 
-// ====== 地址确认 ======
+// ====== 地址/金额确认 ======
 function updateToStatus() {
   const st = $('toStatus'); const input = $('to');
   if (!st || !input) return;
@@ -64,8 +64,6 @@ function confirmTo() {
   if (!isHexAddress(addr)) { log('收款地址格式不正确：需 0x 开头的 40 位十六进制地址', true); return; }
   toConfirmed = true; updateToStatus(); log('已确认收款地址：' + addr);
 }
-
-// ====== 金额确认 ======
 function updateAmountStatus() {
   const st = $('amountStatus'); const input = $('amountEth');
   if (!st || !input) return;
@@ -92,16 +90,31 @@ function toggleAdvanced() {
   }
 }
 
-// ====== 钱包连接 / 账户切换 / 网络切换 ======
+// ====== 连接 / 断开 / 绑定 / 切换账号 / 切链 ======
 async function onConnect() {
-  const res = await connectWallet(); if (!res) return;
+  const res = await connectWallet();
   const cinfo = chainInfoById(Number(res.chainId));
   $('acct').textContent = `已连接：${res.account}`;
   $('chain').value = `${cinfo.chainName} (chainId=${Number(res.chainId)})`;
   setAmountSymbolByChainId(Number(res.chainId));
-  const addr = $('safe').value.trim();
-  if (!addr) { log('请先填写 Safe 地址', true); return; }
-  bindSafe(addr, getSigner() || getProvider()); log('已绑定 Safe 合约：' + addr);
+  log('钱包已连接。若要操作 Safe，请先“绑定合约”。');
+}
+async function onDisconnect() {
+  const had = await disconnectWallet();
+  unbindSafe();
+  $('acct').textContent = '';
+  $('chain').value = '';
+  log(had ? '已断开钱包并解除合约绑定（如需彻底断开，请在钱包的“已连接网站”里移除本网站）' : '当前未连接钱包');
+}
+async function onBindSafe() {
+  try {
+    const addr = $('safe').value.trim();
+    if (!isHexAddress(addr)) throw new Error('Safe 地址格式不正确');
+    const sp = getSigner() || getProvider();
+    if (!sp) throw new Error('请先连接钱包，再绑定合约');
+    bindSafe(addr, sp);
+    log('已绑定 Safe 合约：' + addr);
+  } catch (e) { log(e.message || String(e), true); }
 }
 async function onSwitchAccount() {
   if (!window.ethereum) { log('未检测到钱包扩展', true); return; }
@@ -123,7 +136,7 @@ async function onSwitchNetwork() {
   } catch (e) { log(e.message || String(e), true); }
 }
 
-// ====== 读取配置 / 计算哈希 ======
+// ====== 读取 / 计算哈希 ======
 async function onRead() {
   try {
     const th = await readThreshold(); $('threshold').value = th;
@@ -132,6 +145,11 @@ async function onRead() {
   } catch (e) { log(e.message || String(e), true); }
 }
 async function ensureSafeTxHash() {
+  if (!getSigner()) throw new Error('未连接钱包，请先连接');
+  try { // 确保已绑定
+    // 触发一次 getContract() 的访问是读函数里完成的，这里只要不抛错即可
+    // 若未绑定，后续 readNonce/getTransactionHash 会抛错
+  } catch {}
   if (!toConfirmed) { throw new Error('未确认收款地址：请先点击“确认地址”。'); }
   if (!amountConfirmed) { throw new Error('未确认金额：请先点击“确认金额”。'); }
   const p = readParamsFromUI();
@@ -145,7 +163,7 @@ async function onHash() {
   catch (e) { log(e.message || String(e), true); }
 }
 
-// ====== 批准状态：刷新 & UI 显示 & 自动生成 signatures ======
+// ====== 批准状态 ======
 function renderApprovalsUI(data, threshold) {
   const box = $('approvalsBox'); const sum = $('approvalSummary');
   if (!box || !sum) return;
@@ -161,27 +179,24 @@ async function refreshApprovals() {
     const data = await getApprovalsForHash(hash);
     approvalsCache = data;
     renderApprovalsUI(data, th);
-    if (data.approvedOwners.length >= th) {
-      log(`已满足阈值：${data.approvedOwners.length}/${th}，可一键生成 signatures 并执行`);
-    } else {
-      log(`尚未满足阈值：${data.approvedOwners.length}/${th}，请更多 Owner 执行 approveHash`);
-    }
+    if (data.approvedOwners.length >= th) log(`已满足阈值：${data.approvedOwners.length}/${th}，可一键生成 signatures 并执行`);
+    else log(`尚未满足阈值：${data.approvedOwners.length}/${th}，请更多 Owner 执行 approveHash`);
   } catch (e) { log(e.message || String(e), true); }
 }
 function autoGenSignaturesFromApprovals() {
   const th = Number($('threshold').value || '0');
   const n = approvalsCache?.approvedOwners?.length || 0;
   if (!n) { log('当前没有任何批准记录，请先让 Owner 调用 approveHash', true); return; }
-  if (n < th) { log(`批准数量未达阈值：${n}/${th}，生成的 signatures 无法通过验证`, true); return; }
+  if (n < th) { log(`批准数量未达阈值：${n}/${th}，生成的 signatures 可能无法通过验证`, true); return; }
   const { owners_sorted, sig } = genPrevalidatedSignaturesFromOwners(approvalsCache.approvedOwners);
   $('signatures').value = sig;
   log({ signatures_from_approved: owners_sorted, signatures_len: sig.length });
 }
 
-// ====== 批准 / 执行（两步确认 + 显示 signer） ======
+// ====== 批准 / 执行 ======
 async function onApprove() {
   try {
-    await ensureSafeTxHash(); // 确保 hash 存在 & 已确认 to/amount
+    await ensureSafeTxHash();
     const provider = getProvider() || (getSigner() && getSigner().provider);
     const net = provider ? await provider.getNetwork() : { chainId: NaN };
     const chainIdNum = Number(net.chainId);
@@ -206,8 +221,6 @@ async function onApprove() {
     log('已请求钱包，请在钱包里确认；确认后等待链上回执…');
     const rc = await txPromise;
     log('approveHash 确认：' + rc.transactionHash);
-
-    // ✅ 批准后自动刷新批准状态
     await refreshApprovals();
   } catch (e) { log(e.message || String(e), true); }
 }
@@ -223,7 +236,7 @@ function onGenSigManual() {
 }
 async function onExec() {
   try {
-    await ensureSafeTxHash(); // 前置校验
+    await ensureSafeTxHash();
     const p = readParamsFromUI();
     const sig = $('signatures').value.trim();
     if (!sig) { log('请先生成 signatures（推荐：根据批准生成）', true); return; }
@@ -273,24 +286,25 @@ async function onExec() {
 
 // ====== 初始化与事件绑定 ======
 function main() {
-  // 初始：锁高级参数；更新确认状态提示
   setAdvancedReadonly(true); updateToStatus(); updateAmountStatus();
 
-  // 交互按钮
   $('btnConnect').addEventListener('click', onConnect);
+  $('btnDisconnect').addEventListener('click', onDisconnect);
   $('btnSwitchAccount').addEventListener('click', onSwitchAccount);
+  $('btnBindSafe').addEventListener('click', onBindSafe);
+
   $('btnRead').addEventListener('click', onRead);
   $('btnHash').addEventListener('click', onHash);
   $('btnApprove').addEventListener('click', onApprove);
-  $('btnSig').addEventListener('click', onGenSigManual);            // 手动（保留）
-  $('btnAutoSig').addEventListener('click', autoGenSignaturesFromApprovals); // ✅ 新增：自动
+  $('btnSig').addEventListener('click', onGenSigManual);
+  $('btnAutoSig').addEventListener('click', autoGenSignaturesFromApprovals);
   $('btnExec').addEventListener('click', onExec);
   $('btnToggleAdvanced').addEventListener('click', toggleAdvanced);
   $('btnConfirmTo').addEventListener('click', confirmTo);
   $('btnConfirmAmount').addEventListener('click', confirmAmount);
-  $('btnRefreshApprovals').addEventListener('click', refreshApprovals);     // ✅ 新增：刷新批准
+  $('btnRefreshApprovals').addEventListener('click', refreshApprovals);
 
-  // 输入改动 → 取消确认，防止“改完还是锁着”
+  // 输入改动 → 取消确认
   $('to').addEventListener('input', () => { if (toConfirmed){ toConfirmed=false; updateToStatus(); log('收款地址已修改，需重新确认'); }});
   $('amountEth').addEventListener('input', () => { if (amountConfirmed){ amountConfirmed=false; updateAmountStatus(); log('金额已修改，需重新确认'); }});
 
@@ -307,18 +321,20 @@ function main() {
     window.ethereum.on('accountsChanged', async (accts) => {
       if (accts && accts.length) {
         $('acct').textContent = `已连接：${accts[0]}`; log('已切换账号为：' + accts[0]);
-        try { const addr = $('safe').value.trim(); if (addr) { bindSafe(addr, getSigner() || getProvider()); log('已用新账号重新绑定 Safe 合约：' + addr); } }
-        catch (e) { log(e?.message || String(e), true); }
-      } else { $('acct').textContent = ''; log('账号已断开或清空授权', true); }
+        try {
+          const addr = $('safe').value.trim();
+          if (addr && getProvider()) { bindSafe(addr, getSigner() || getProvider()); log('已用新账号重新绑定 Safe 合约：' + addr); }
+        } catch (e) { log(e?.message || String(e), true); }
+      } else {
+        $('acct').textContent = '';
+        log('账号已断开或清空授权', true);
+      }
     });
   }
 
-  // Safe 地址变化 -> 重新绑定
+  // Safe 地址变化 -> 只提示，不自动绑定
   $('safe').addEventListener('change', () => {
-    const addr = $('safe').value.trim();
-    if (!addr) { log('请先填写 Safe 地址', true); return; }
-    try { bindSafe(addr, getSigner() || getProvider()); log('已绑定 Safe 合约：' + addr); }
-    catch (e) { log(e.message || String(e), true); }
+    log('Safe 地址已修改：点击“绑定合约”以生效');
   });
 }
 

@@ -6,9 +6,12 @@ let contract = null;
 
 export function bindSafe(addr, signerOrProvider) {
   if (!addr) throw new Error('缺少 Safe 地址');
+  if (!signerOrProvider) throw new Error('请先连接钱包后再绑定合约');
   contract = new ethers.Contract(addr, ABI, signerOrProvider);
   return contract;
 }
+
+export function unbindSafe() { contract = null; }
 
 export function getContract() {
   if (!contract) throw new Error('尚未绑定 Safe 合约');
@@ -33,7 +36,6 @@ export async function isOwner(addr) {
 }
 
 export async function approvedValue(owner, hash) {
-  // returns string or BigNumber; normalize to boolean
   const v = await getContract().approvedHashes(owner, hash);
   return !ethers.BigNumber.from(v).isZero();
 }
