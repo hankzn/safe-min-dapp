@@ -5,6 +5,21 @@ import { connectWallet, getProvider, getSigner } from './wallet.js';
 import { bindSafe, readThreshold, readNonce, getTransactionHash, approveHash, execTransaction } from './safe.js';
 import { switchOrAdd, CHAINS } from './chains.js';
 
+
+function setAmountSymbolByChainId(chainIdNum) {
+  // 默认 ETH
+  let symbol = 'ETH';
+  for (const k in CHAINS) {
+    const c = CHAINS[k];
+    if (parseInt(c.chainId, 16) === chainIdNum) {
+      symbol = c.nativeCurrency?.symbol || symbol;
+      break;
+    }
+  }
+  const el = $('amountLabel');
+  if (el) el.textContent = `Amount (${symbol})（自动换算为 wei）`;
+}
+
 function readParamsFromUI() {
   return {
     to: $('to').value.trim(),
@@ -36,6 +51,7 @@ async function onConnect() {
   if (!res) return;
   $('acct').textContent = `已连接：${res.account}`;
   $('chain').value = `chainId=${res.chainId}`;
+  setAmountSymbolByChainId(res.chainId);   // ← 新增
   const addr = $('safe').value.trim();
   if (!addr) { log('请先填写 Safe 地址', true); return; }
   bindSafe(addr, getSigner() || getProvider());
@@ -96,6 +112,7 @@ async function onSwitchNetwork() {
     await switchOrAdd(key);
     const c = CHAINS[key];
     $('chain').value = `chainId=${parseInt(c.chainId, 16)} (${c.chainName})`;
+    setAmountSymbolByChainId(parseInt(c.chainId, 16));   // ← 新增
     log('已切换到：' + c.chainName);
     // 切链后你需要填/检查该链上的 Safe 地址
   } catch (e) { log(e.message || String(e), true); }
@@ -115,6 +132,7 @@ function main() {
   if (window.ethereum) {
     window.ethereum.on('chainChanged', (hexId) => {
       $('chain').value = `chainId=${parseInt(hexId, 16)}`;
+      setAmountSymbolByChainId(num);   // ← 新增
       log('检测到网络切换：' + hexId);
     });
     window.ethereum.on('accountsChanged', (accts) => {
