@@ -44,6 +44,27 @@
 <body>
   <h1>Safe 最简本地工具（MetaMask / 硬件钱包）</h1>
 
+
+  <!-- ✅ 新增：网络（插在这里） -->
+  <fieldset>
+    <legend>网络</legend>
+    <div class="row">
+      <div>
+        <label>选择网络</label>
+        <select id="netSelect">
+          <option value="arbitrum">Arbitrum One (42161)</option>
+          <option value="ethereum">Ethereum Mainnet (1)</option>
+          <option value="bsc">BNB Smart Chain (56)</option>
+        </select>
+      </div>
+      <div>
+        <label class="hint">说明</label>
+        <div class="hint">切换后请填写该链上的 Safe 地址</div>
+      </div>
+    </div>
+    <button id="btnSwitch" class="secondary">切换网络</button>
+  </fieldset>
+
   <fieldset>
     <legend>连接</legend>
     <div class="row">

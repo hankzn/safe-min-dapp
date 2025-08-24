@@ -3,6 +3,7 @@
 import { $, log, ensure0x, toWeiFromEthStr, zeroAddr, isHexAddress, sortLowercaseAddresses } from './utils.js';
 import { connectWallet, getProvider, getSigner } from './wallet.js';
 import { bindSafe, readThreshold, readNonce, getTransactionHash, approveHash, execTransaction } from './safe.js';
+import { switchOrAdd, CHAINS } from './chains.js';
 
 function readParamsFromUI() {
   return {
@@ -22,10 +23,8 @@ function readParamsFromUI() {
 function genPrevalidatedSignatures(ownersStr) {
   if (!ownersStr) throw new Error('请填写 Owner 地址列表');
   const owners = sortLowercaseAddresses(ownersStr.split(','));
-
   const chunks = owners.map(a => {
     if (!isHexAddress(a)) throw new Error('非法地址：' + a);
-    // 32字节地址（去0x并左填充），+ 32字节 r/s 为 0，+ v=01（“预验证”）
     return a.slice(2).padStart(64, '0') + '0'.repeat(64) + '01';
   });
   const sig = '0x' + chunks.join('');
@@ -37,7 +36,6 @@ async function onConnect() {
   if (!res) return;
   $('acct').textContent = `已连接：${res.account}`;
   $('chain').value = `chainId=${res.chainId}`;
-
   const addr = $('safe').value.trim();
   if (!addr) { log('请先填写 Safe 地址', true); return; }
   bindSafe(addr, getSigner() || getProvider());
@@ -92,6 +90,17 @@ async function onExec() {
   } catch (e) { log(e.message || String(e), true); }
 }
 
+async function onSwitchNetwork() {
+  const key = $('netSelect').value; // ethereum / arbitrum / bsc
+  try {
+    await switchOrAdd(key);
+    const c = CHAINS[key];
+    $('chain').value = `chainId=${parseInt(c.chainId, 16)} (${c.chainName})`;
+    log('已切换到：' + c.chainName);
+    // 切链后你需要填/检查该链上的 Safe 地址
+  } catch (e) { log(e.message || String(e), true); }
+}
+
 function main() {
   // 事件绑定
   $('btnConnect').addEventListener('click', onConnect);
@@ -100,6 +109,20 @@ function main() {
   $('btnApprove').addEventListener('click', onApprove);
   $('btnSig').addEventListener('click', onGenSig);
   $('btnExec').addEventListener('click', onExec);
+  $('btnSwitch').addEventListener('click', onSwitchNetwork);
+
+  // 监听钱包网络/账户变化
+  if (window.ethereum) {
+    window.ethereum.on('chainChanged', (hexId) => {
+      $('chain').value = `chainId=${parseInt(hexId, 16)}`;
+      log('检测到网络切换：' + hexId);
+    });
+    window.ethereum.on('accountsChanged', (accts) => {
+      if (accts && accts.length) $('acct').textContent = `已连接：${accts[0]}`;
+    });
+  }
+
+  // 切换 Safe 地址时，重新绑定
   $('safe').addEventListener('change', () => {
     const addr = $('safe').value.trim();
     if (!addr) { log('请先填写 Safe 地址', true); return; }
