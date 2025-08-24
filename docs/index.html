@@ -90,7 +90,7 @@
       </div>
       <div>
         <label>nonce()</label>
-        <input id="nonce" placeholder="留空则自动读取" />
+        <input id="nonce" placeholder="留空则自动读取" readonly />
       </div>
     </div>
     <button class="secondary" id="btnRead">读取 threshold / nonce</button>
@@ -101,7 +101,11 @@
     <div class="row">
       <div>
         <label>收款地址（to）</label>
-        <input id="to" placeholder="0xReceiver" />
+        <div style="display:flex;gap:8px;align-items:center">
+          <input id="to" placeholder="0xReceiver" style="flex:1" />
+          <button id="btnConfirmTo" class="secondary">确认地址</button>
+        </div>
+        <div id="toStatus" class="hint"></div>
       </div>
       <div>
         <label id="amountLabel">Amount (ETH)（自动换算为 wei）</label>
@@ -115,21 +119,22 @@
       </div>
       <div>
         <label>operation</label>
-        <input id="operation" value="0" />
+        <input id="operation" value="0" readonly />
       </div>
     </div>
     <div class="row">
-      <div><label>safeTxGas</label><input id="safeTxGas" value="0" /></div>
-      <div><label>baseGas</label><input id="baseGas" value="0" /></div>
+      <div><label>safeTxGas</label><input id="safeTxGas" value="0" readonly /></div>
+      <div><label>baseGas</label><input id="baseGas" value="0" readonly /></div>
     </div>
     <div class="row">
-      <div><label>gasPrice</label><input id="gasPrice" value="0" /></div>
-      <div><label>gasToken</label><input id="gasToken" value="0x0000000000000000000000000000000000000000" /></div>
+      <div><label>gasPrice</label><input id="gasPrice" value="0" readonly /></div>
+      <div><label>gasToken</label><input id="gasToken" value="0x0000000000000000000000000000000000000000" readonly /></div>
     </div>
     <div class="row">
-      <div><label>refundReceiver</label><input id="refundReceiver" value="0x0000000000000000000000000000000000000000" /></div>
+      <div><label>refundReceiver</label><input id="refundReceiver" value="0x0000000000000000000000000000000000000000" readonly /></div>
       <div><label>safeTxHash（自动计算）</label><input id="safeTxHash" disabled /></div>
     </div>
+    <button id="btnToggleAdvanced" class="secondary">解锁高级参数</button>
     <button class="secondary" id="btnHash">计算 safeTxHash</button>
   </fieldset>
 
