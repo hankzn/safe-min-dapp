@@ -426,6 +426,37 @@ async function onMakeLink() {
     log('已复制深链：打开即自动填充（信息在 URL #hash，不经服务端）');
   } catch (e) { log(e.message || String(e), true); }
 }
+function clearQR(){ const box = $('qrBox'); if (box) box.innerHTML=''; }
+async function onShowQR(){
+  try{
+    // 没有分享串就先自动生成一份（含安全校验）
+    if (!$('shareStr').value.trim()) { await onBuildShare(); }
+    const s = $('shareStr').value.trim();
+    if (!s) { log('请先生成分享字符串', true); return; }
+
+    // 用分享串解析出 payload → 生成深链（#tx=...）
+    const { payload } = await parseShareString(s);
+    const url = makeDeepLink(payload);
+
+    // 生成二维码
+    clearQR();
+    // 依赖全局 QRCode（来自 qrcode.min.js）
+    // 宽高 256，可按需改为 320/384；容错等级 M 即可
+    new QRCode($('qrBox'), { text: url, width: 256, height: 256, correctLevel: QRCode.CorrectLevel.M });
+
+    $('qrMeta').textContent = '用手机相机/钱包扫码打开即可自动填充参数（信息在 URL #hash，仅本地解析）';
+    $('qrOverlay').style.display = 'flex';
+
+    // 体验优化：顺便把深链也复制到剪贴板
+    try { await navigator.clipboard.writeText(url); } catch(_) {}
+  }catch(e){
+    log(e.message || String(e), true);
+  }
+}
+function closeQR(){
+  $('qrOverlay').style.display = 'none';
+  clearQR();
+}
 
 
 
@@ -458,6 +489,11 @@ async function main() {
   $('btnDownloadShare')?.addEventListener('click', onDownloadShare);
   $('btnImportStr')?.addEventListener('click', onImportStr);
   $('btnMakeLink')?.addEventListener('click', onMakeLink);
+  $('btnShowQR')?.addEventListener('click', onShowQR);
+  $('btnCloseQR')?.addEventListener('click', closeQR);
+  // 点击遮罩空白处也关闭
+  $('qrOverlay')?.addEventListener('click', (e) => { if (e.target?.id === 'qrOverlay') closeQR(); });
+
 
   // 输入改动 → 取消确认
   $('to')?.addEventListener('input', () => {

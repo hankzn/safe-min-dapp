@@ -23,6 +23,7 @@
 <!-- 自托管 ethers（UMD，挂到 window.ethers） -->
 <script src="vendor/ethers-5.7.2.umd.min.js"></script>
 <!-- 你的应用脚本（ESM 模块） -->
+<script src="vendor/qrcode.min.js"></script>
 <script type="module" src="js/app.js"></script>
 
 <style>
@@ -78,6 +79,11 @@
     border-radius: 6px;
     margin-top: 8px;
   }
+
+  #qrOverlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;z-index:2000}
+  #qrCard{background:#fff;padding:16px;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.2);max-width:90vw}
+  #qrBox{width:256px;height:256px;margin:auto}
+  #qrMeta{font-size:12px;color:#666;text-align:center;margin-top:8px}
 
 
 </style>
@@ -234,6 +240,7 @@
         <button id="btnCopyShare" class="secondary">复制字符串</button>
         <button id="btnMakeLink" class="secondary">复制深链</button>
         <button id="btnDownloadShare" class="secondary">下载 JSON 文件</button>
+        <button id="btnShowQR" class="secondary">显示二维码</button>
       </div>
       <div id="shareInfo" class="hint" style="margin-top:6px"></div>
     </div>
@@ -268,6 +275,17 @@
 
   <button id="btnExec">execTransaction（payable amount 固定 0）</button>
 </fieldset>
+
+<div id="qrOverlay" role="dialog" aria-modal="true">
+  <div id="qrCard">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:8px">
+      <strong>扫码导入</strong>
+      <button id="btnCloseQR" class="secondary">关闭</button>
+    </div>
+    <div id="qrBox"></div>
+    <div id="qrMeta" class="hint"></div>
+  </div>
+</div>
 
 
 </body>
